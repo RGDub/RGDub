@@ -17,65 +17,104 @@ end.
 | Grain | (date, campaign, ad group, advertised SKU) | (hour, campaign, ad group, **ad**, target, placement) — SKU comes from a join |
 | What we have today | This, minus `adGroupId` (see RUNBOOK §2) | Nothing |
 
-## What is already in place
+## What is already in place (verified 2026-09-18)
 
-`sp_performance_master` is fed from the Sponsored Products advertised-product
-report (v3 `spAdvertisedProduct`, `timeUnit=DAILY`). `_sp_load_staging` holds
-6,184 rows against the master's 5,884 rows for the trailing 30 days, so the
-current notebook already re-pulls roughly a 30-day window each run and merges
-it. That is the right shape for option A; it is just missing `adGroupId`
-in the key.
-
-Reference tables `DailySPAdsConsAPI` / `DailySPAdsBySKU` stopped on
-2026-03-11 and are only useful for reconciliation.
+- **Ads API access exists.** Pun Labs LLC's Amazon Ads API registration was
+  approved on 2026-03-10 (email "Amazon Ads API Registration Request
+  Approved"). The LWA client id/secret and refresh token live in the Drive doc
+  "Amazon Developer Credentials"; they need to move into Secret Manager (below).
+- **The Make.com scenario is history.** The May 2026 handoff describes a
+  Make.com scenario calling the *v2* `sp/productAds/report` endpoint. v2
+  reporting is gone; everything below uses v3 `spAdvertisedProduct`.
+- **The current loader is a daily 31-day reload, run by hand.** BigQuery job
+  history shows the same sequence every day under `grant.weatherford@`:
+  a LOAD into `_sp_load_staging`, then
+  `BEGIN TRANSACTION; DELETE ... WHERE date BETWEEN today-31 AND today-1;
+  INSERT ... SELECT * FROM _sp_load_staging; COMMIT`, then a duplicate check.
+  That is already option A's shape; it just lacks `adGroupId` and any guard
+  against a truncated report wiping the window.
+- **Volume is small.** ~220 rows/day, ~140 campaigns, ~49 SKUs, $60–120/day.
+- `pipeline_run_log` is live: `amz_fba_inv_ledger` and `awd_inventory_daily`
+  already write heartbeats. `sp_ads_daily` and `ads_stream_poller` join them.
+- Reference tables `DailySPAdsConsAPI` / `DailySPAdsBySKU` stopped on
+  2026-03-11 and are only useful for reconciliation.
 
 ## Option A — daily reports with a rolling lookback (no new infrastructure)
 
 This is what "continuous" means for reporting: the table is always complete
-and always reflects Amazon's latest restatements.
+and always reflects Amazon's latest restatements. It is implemented in
+`pipelines/sp_ads_daily.py` on top of `pipelines/lib/ads_api.py`.
 
-1. **Key on the true grain.** Add `adGroupId` (and `adGroupName`) to the
-   report's `columns` and to the table. Key becomes
-   `(date, campaignId, adGroupId, advertisedSku)`. This is the fix the runbook
-   already calls for and it is a prerequisite for everything below, because a
-   MERGE on the current key would collapse the ad-group rows.
-2. **Re-pull a trailing window daily.** Amazon restates conversion columns for
-   up to 30 days after the click (the `sales30d` / `purchases30d` columns are
-   literally attribution windows). Pull `[today-31, today-1]` every run and
-   `MERGE` on the full key. Impressions and clicks settle within a day or two;
-   conversions keep moving. A 31-day window covers the longest attribution
-   column in the table.
-3. **Migrate `date` to `DATE`** while touching the schema, so the MERGE join
-   doesn't need `PARSE_DATE` on both sides and partition pruning works. Partition
-   the table by `date`, cluster by `campaignId, adGroupId`.
-4. **Wrap the run** in `run_logged()` and `preflight()` from `pipelines/lib` so
-   a silent failure is visible.
+### What the loader does
 
-Sketch of the merge:
+1. Requests one v3 `spAdvertisedProduct` report, `timeUnit=DAILY`,
+   `groupBy=["advertiser"]`, for `[today-31, today-1]` — the longest attribution
+   column in the table is `sales30d`, so a 31-day window catches every
+   restatement. Requests are chunked at Amazon's 31-day per-report limit, so a
+   backfill of any range works the same way.
+2. Adds `adGroupName`, `adGroupId`, `adId` to the columns. This is the runbook's
+   remedy for the "duplicates" in §2: the table can now represent its grain.
+3. Transforms rows to the table's exact types, derives `Parent SKU` with the
+   same suffix rule as before (`-FBA`, `-FBM`, `-UPC`, `-CORR`, any position).
+4. **Refuses to load** if the report repeats the full key
+   `(date, campaignId, adGroupId, advertisedSku)`, if it is empty, or if it has
+   fewer than half the rows the master already holds for the window (a
+   truncated report must never delete 31 days of history).
+5. Loads `_sp_load_staging` (WRITE_TRUNCATE, explicit schema) and runs the same
+   `DELETE window + INSERT` transaction the manual process uses, with named
+   columns instead of `SELECT *`.
+6. Writes a `pipeline_run_log` heartbeat either way.
 
-```sql
-MERGE `punlabs.AMZSales.sp_performance_master` m
-USING `punlabs.AMZSales._sp_load_staging` s
-ON  m.date = s.date
-AND m.campaignId = s.campaignId
-AND m.adGroupId = s.adGroupId
-AND m.advertisedSku = s.advertisedSku
-WHEN MATCHED THEN UPDATE SET
-  impressions = s.impressions, clicks = s.clicks, cost = s.cost, spend = s.spend,
-  sales1d = s.sales1d, sales7d = s.sales7d, sales14d = s.sales14d, sales30d = s.sales30d,
-  purchases1d = s.purchases1d, purchases7d = s.purchases7d,
-  purchases14d = s.purchases14d, purchases30d = s.purchases30d
-  -- ...and the remaining attributed columns
-WHEN NOT MATCHED THEN INSERT ROW;
+### Setup, once
+
+```bash
+# 1. Credentials into Secret Manager (values from the "Amazon Developer
+#    Credentials" Drive doc; then delete them from the doc).
+for s in amazon-ads-client-id amazon-ads-client-secret amazon-ads-refresh-token amazon-ads-profile-id; do
+  printf '%s' "$VALUE" | gcloud secrets create $s --project punlabs --data-file=-
+  gcloud secrets add-iam-policy-binding $s --project punlabs \
+    --member serviceAccount:amzsales@punlabs.iam.gserviceaccount.com \
+    --role roles/secretmanager.secretAccessor
+done
+# Profile id, if unknown (pick the US seller profile's profileId):
+#   python - <<'PY'
+#   from pipelines.lib.secrets import get_secret
+#   from pipelines.lib.ads_api import AdsApiClient
+#   c = AdsApiClient(get_secret("amazon-ads-client-id"), get_secret("amazon-ads-client-secret"), get_secret("amazon-ads-refresh-token"))
+#   print(c.list_profiles())
+#   PY
+
+# 2. Schema migration (adds the three grain columns; safe to re-run)
+bq query --use_legacy_sql=false < sql/migrations/2026-09-18_sp_performance_master_add_adgroup.sql
+
+# 3. Dry run: downloads, validates, writes nothing
+python -m pipelines.sp_ads_daily --dry-run
+
+# 4. Real run, then backfill adGroupId for the rest of the 95-day lookback
+python -m pipelines.sp_ads_daily
+python -m pipelines.sp_ads_daily --start 2026-06-16 --end 2026-08-16
 ```
 
-Ads API limits that matter: one report request covers at most 31 days; the SP
-lookback is 95 days (SB/SD are longer); report generation is asynchronous and
-usually takes a few minutes, so poll `GET /reporting/reports/{id}` with backoff
-(30 s → 5 min) rather than a tight loop, and honour `429` `Retry-After`.
+### Schedule it
 
-Cost: nothing new. This runs inside the existing BigQuery Data Pipelines
-schedule.
+Put the module in the same BigQuery Data Pipelines notebook that runs the
+other extracts, first cell:
+
+```python
+from pipelines.sp_ads_daily import run
+run()
+```
+
+Then add `sql/validation/sp_ads_grain_check.sql` as a scheduled query after
+the load and alert on any row, and keep `sql/monitoring/freshness_check.sql`
+on `sp_performance_master` (tolerance 3 days).
+
+Ads API limits that matter: 31 days per report request; 95-day lookback for
+Sponsored Products; report generation is asynchronous and usually takes a few
+minutes. The client polls with backoff (30 s → 5 min) and honours `429`
+`Retry-After`.
+
+Cost: nothing new. This runs inside the existing schedule.
 
 ## Option B — Amazon Marketing Stream (hourly push)
 
@@ -111,6 +150,38 @@ dataset variants across the NA/EU/FE regions; the ones we'd want are
   `ad_id`. Advertised SKU/ASIN comes from the `ads` entity dataset or a nightly
   pull of product ads. Keep `dim_sp_ads(ad_id, ad_group_id, campaign_id, sku,
   asin, valid_from, valid_to)` and join at query time.
+
+### What is scaffolded in this repo
+
+- `pipelines/ads_stream/subscribe.py` — creates one subscription per dataset
+  against your SQS queue ARN, skipping ones that already exist.
+- `pipelines/ads_stream/poller.py` — long-polls the queue, confirms the SNS
+  subscription when that message arrives, streams records into
+  `ads_stream_raw` keyed on `idempotency_id`, deletes messages only after
+  BigQuery accepts them, and writes a heartbeat.
+- `sql/ads_stream/ddl.sql` — the raw table, hourly traffic/conversion views
+  that de-dup then SUM, and an `ads` entity view for the ad → SKU join.
+- `sql/validation/ads_stream_vs_report.sql` — stream-vs-report reconciliation.
+
+Neither script has run against a live queue yet (no AWS account is attached
+to this project); the parsing and delete-after-insert logic is unit-tested in
+`tests/test_ads_stream_poller.py`.
+
+### AWS side, once
+
+1. Create an SQS standard queue in `us-east-1` (NA profile), e.g.
+   `amazon-marketing-stream`, with a dead-letter queue and a 14-day retention.
+2. Queue policy: allow `sqs:SendMessage` from the Amazon Marketing Stream SNS
+   principals for each dataset. The per-dataset Amazon account IDs are in the
+   onboarding guide's "Amazon Marketing Stream datasets" table; copy them from
+   there.
+3. An IAM role with `sqs:ReceiveMessage`, `sqs:DeleteMessage`,
+   `sqs:GetQueueAttributes` on that queue, trusted by
+   `accounts.google.com` with an audience condition on the Cloud Run service
+   account's unique id (web identity federation). No long-lived keys.
+4. `python -m pipelines.ads_stream.subscribe create --queue-arn <arn>`
+5. Deploy `poller.py` as a Cloud Run job, Cloud Scheduler every 5 minutes,
+   `--max-seconds 240`.
 
 ### Getting it into BigQuery: three bridges
 

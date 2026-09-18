@@ -129,7 +129,9 @@ tables overlap returns **zero divergent rows**. The table as it stands is
 correct in full, not merely on the sampled window.
 
 **Correct remedy:** add `adGroupId` to the extract and the table, then key on
-`(date, campaignId, adGroupId, advertisedSku)`.
+`(date, campaignId, adGroupId, advertisedSku)`. Implemented: run
+`sql/migrations/2026-09-18_sp_performance_master_add_adgroup.sql` once, then
+switch the daily load to `pipelines/sp_ads_daily.py` (see `docs/ADS_STREAM.md`).
 
 ### The May 2026 dedup was correct
 

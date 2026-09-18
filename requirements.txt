@@ -1,0 +1,8 @@
+# Runtime: the Colab Enterprise image already ships google-cloud-bigquery and
+# requests; the stream poller additionally needs boto3.
+google-cloud-bigquery>=3.20
+requests>=2.31
+boto3>=1.34
+
+# Tests
+pytest>=8

@@ -16,6 +16,7 @@ earlier handoff notes.
 | `sql/monitoring/freshness_check.sql` | Per-table staleness alerting. Schedule it; alert on any returned row. |
 | `sql/monitoring/pipeline_run_log.sql` | DDL for the heartbeat table, plus its alert query. |
 | `sql/validation/ads_grain_reconciliation.sql` | Ad spend reconciliation. **Read before touching `sp_performance_master`.** |
+| `docs/ADS_STREAM.md` | How to get Amazon Ads data continuously: daily reports with a rolling lookback vs. Amazon Marketing Stream (hourly push), and how each lands in BigQuery. |
 
 ## Two things to know before changing anything
 

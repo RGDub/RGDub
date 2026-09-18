@@ -174,7 +174,108 @@ problem aborts loudly instead of producing a partial load.
 
 ---
 
-## 5. Unrelated / out of scope
+## 5. Inventory ledger notebook — empty-report crash (2026-09-18)
+
+### Symptom
+
+`AMZ_FBA_INVLedger.ipynb` aborts after reporting a *successful* report job:
+
+```
+Status: IN_QUEUE
+Status: DONE
+EmptyDataError: No columns to parse from file
+```
+
+### Root cause
+
+Not a transport failure and not a bug in the report. `DONE` plus an empty
+document is SP-API's ordinary way of saying **the job succeeded and matched no
+rows** — and an empty report document is a **zero-byte file**, not a
+header-only TSV.
+
+The notebook did anticipate an empty result:
+
+```python
+df = pd.read_csv(io.StringIO(raw_data), sep='\t')
+
+if df.empty:
+    print(f"! No data found for period {start_time_str}.")
+```
+
+but `read_csv` raises `EmptyDataError` on zero bytes, so it raised one line
+*before* the guard. **That `if df.empty:` branch was unreachable**, and every
+no-data day surfaced as a crash instead of a log line.
+
+### Why the report came back empty
+
+The window was a single day, `00:00:00`–`23:59:59`, two days back. The summary
+view aggregates to whole periods and snaps to period boundaries, so a window
+that does not cover a complete period can match nothing. Ranked by likelihood:
+
+1. the window is too recent and the ledger has not settled (24–72h is typical,
+   but it runs longer after a backlog);
+2. the window does not span a whole aggregation period;
+3. a misspelled key in `reportOptions` — SP-API **accepts and silently ignores**
+   unknown option keys, so a typo produces a wrong-shaped or empty report with
+   no error. Note the genuinely inconsistent prefixes in Amazon's own names:
+   `aggregateByLocation` but `aggregat**ed**ByTimePeriod`.
+
+The rewrite requests midnight-to-midnight over a 3-day range, and on an empty
+result retries once over 14 days before concluding there is no data — which
+separates cause 1 from a genuinely idle ledger instead of guessing.
+
+### Three further defects in the same notebook
+
+- **It still imported `google.cloud.secretmanager`.** This is the §1 outage.
+  Whatever else was fixed, the scheduled run would still have died in cell 1.
+  It now uses `pipelines.lib.secrets`.
+- **`WRITE_APPEND` with no key.** Every manual re-run appended a second copy of
+  the day. See §6 — this has already cost 1,374 duplicate rows. The load is now
+  delete-then-append keyed on the dates being written, so re-running is safe.
+- **`while True` with no deadline, re-minting an LWA token every 30 seconds.**
+  A stuck report pinned the runtime indefinitely, and the poll loop made three
+  Secret Manager calls plus an LWA exchange per iteration. `wait_for_report`
+  takes a timeout; `LwaTokenProvider` caches the token.
+
+The reusable parts live in `pipelines/lib/spapi_reports.py`; the other SP-API
+notebooks should be moved onto it, since they share all four defects.
+
+---
+
+## 6. Inventory ledger: 1,374 duplicate rows — and why this is NOT §2
+
+`PL-AMZSales-INVLedger` carries **1,374 surplus rows across 36 dates**
+(2025-10-15 .. 2026-07-27), left by the keyless `WRITE_APPEND` described above
+plus the many manual re-runs since March.
+
+**§2 says do not deduplicate `sp_performance_master`. That warning does not
+carry over to this table, and the difference is measured, not assumed:**
+
+| | `sp_performance_master` (§2) | `PL-AMZSales-INVLedger` |
+|---|---|---|
+| Surplus rows on the natural key | 401 | 1,374 |
+| Do the surplus rows carry different measures? | **Yes** — different impressions, clicks, cost | **No** — byte-identical, in every one of 1,374 cases |
+| Verdict | Real finer grain (ad group). **Keep.** | Same fact loaded twice. **Safe to remove.** |
+
+Two re-run signatures account for all of it, and neither touches a measure
+column:
+
+- **2026-03-11 .. 03-31 (1,247 rows)** — one copy has `Parent SKU` and
+  `Inventory Binary` populated, the other has both `NULL`. Two notebook
+  versions, one predating the enrichment step, loaded the same days.
+- **2026-07-15 .. 07-17 (81 rows)** — both copies enriched, differing only in
+  `Title`, because the ASIN's title was edited on Amazon between the two runs.
+
+`sql/validation/invledger_duplicate_audit.sql` characterises this and carries
+the remediation, **commented out and not run**. Before running it, execute its
+query 1: `surplus_with_differing_measures` must be `0`. If it is ever non-zero,
+stop — that would mean a real grain is hiding in these rows, and §2's lesson
+*would* apply. Verified 2026-09-18: the dedup keeps 46,114 of 47,488 rows,
+removing exactly the 1,374 the audit predicts.
+
+---
+
+## 7. Unrelated / out of scope
 
 - `punlabs.AMZSalesbyTransaction` — referenced in the forecasting handoff, **does
   not exist**. The nearest live table is `PL-AMZSales-AMZTransactions`. Any

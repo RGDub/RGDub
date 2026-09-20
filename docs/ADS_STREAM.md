@@ -169,19 +169,58 @@ to this project); the parsing and delete-after-insert logic is unit-tested in
 
 ### AWS side, once
 
-1. Create an SQS standard queue in `us-east-1` (NA profile), e.g.
-   `amazon-marketing-stream`, with a dead-letter queue and a 14-day retention.
-2. Queue policy: allow `sqs:SendMessage` from the Amazon Marketing Stream SNS
-   principals for each dataset. The per-dataset Amazon account IDs are in the
-   onboarding guide's "Amazon Marketing Stream datasets" table; copy them from
-   there.
-3. An IAM role with `sqs:ReceiveMessage`, `sqs:DeleteMessage`,
-   `sqs:GetQueueAttributes` on that queue, trusted by
-   `accounts.google.com` with an audience condition on the Cloud Run service
-   account's unique id (web identity federation). No long-lived keys.
-4. `python -m pipelines.ads_stream.subscribe create --queue-arn <arn>`
-5. Deploy `poller.py` as a Cloud Run job, Cloud Scheduler every 5 minutes,
-   `--max-seconds 240`.
+Two ways to receive. Both can coexist, and the S3 archive is worth having
+regardless of which bridge feeds BigQuery.
+
+**Firehose → S3 (archive of record, no consumer code).** Amazon's reference
+CDK stack (`amzn/amazon-marketing-stream-examples`) deploys one Firehose +
+bucket per dataset: `cdk deploy AmzStream-NA-campaigns AmzStream-NA-budget-usage
+--context delivery_type=firehose`. Deploy the datasets you want by name;
+`cdk deploy --all` creates a stack for every dataset in every region. Verified
+from the stack source on 2026-09-20:
+
+- It sets only the S3 prefix
+  (`<dataset>/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/`,
+  UTC) and an `errors/<dataset>/` prefix. **No buffering, compression or
+  record delimiter.** Add `AppendDelimiterToRecord`, GZIP and a 900 s buffer
+  yourself, or BigQuery cannot load the files (records arrive concatenated on
+  one line).
+- Firehose subscriptions need no SNS confirmation. The subscription request
+  carries the delivery stream ARN plus the stack's subscriber and subscription
+  role ARNs; `pipelines/lib/ads_api.py` only implements the SQS body today, so
+  use the stack's `amz_stream_cli create` for Firehose.
+
+**SQS (what `poller.py` reads).** A standard queue in `us-east-1` with a
+dead-letter queue. The queue policy must allow `sqs:SendMessage` from each
+dataset's Amazon-owned SNS account. NA account ids from the reference
+stack's `stream_infrastructure_config.yml`:
+
+| dataset | NA account |
+|---|---|
+| sp-traffic | 906013806264 |
+| sp-conversion | 802324068763 |
+| budget-usage | 055588217351 |
+| campaigns | 570159413969 |
+| adgroups | 118846437111 |
+| ads | 305370293182 |
+| targets | 644124924521 |
+| sp-budget-recommendations | 678715897637 |
+
+EU and FE use different ids; the same file lists them. There is no
+`sp-budget-usage` dataset; budget usage for SP/SB/SD is `budget-usage`.
+
+Then: an IAM role with receive/delete/get-attributes on the queue, trusted by
+`accounts.google.com` with an audience condition on the Cloud Run service
+account (web identity federation);
+`python -m pipelines.ads_stream.subscribe create --queue-arn <arn>`; deploy
+`poller.py` as a Cloud Run job on a 5-minute schedule with `--max-seconds 240`.
+
+### Location matters
+
+`punlabs.AMZSales` lives in **us-central1**. Any dataset that will be joined
+to it (`ads_stream_raw`, or an `AMZStream` dataset) must be created in
+`us-central1` too, not the `US` multi-region; BigQuery refuses cross-location
+joins.
 
 ### Getting it into BigQuery: three bridges
 
@@ -196,12 +235,15 @@ to this project); the parsing and delete-after-insert logic is unit-tested in
    Manager (read via `pipelines/lib/secrets.py`) works and can be swapped later.
    Handles the `SubscriptionConfirmation` message in the same loop.
 2. **Firehose → S3 → BigQuery Data Transfer Service.** No consumer code at all:
-   Firehose lands newline-delimited JSON in S3 every 60–900 s, and a scheduled
-   S3 transfer loads it into BigQuery. Simplest to operate, slowest (hours, since
-   DTS S3 transfers run at most every 24 h unless triggered by API… check the
-   current minimum) and needs S3 lifecycle cleanup. Firehose subscriptions skip
-   the SNS confirmation step but require two IAM roles (subscriber and
-   subscription roles) that Amazon's principal assumes.
+   Firehose lands newline-delimited JSON in S3, and a scheduled S3 transfer
+   loads it into BigQuery. Simplest to operate, but **DTS S3 transfers run at
+   most once every 24 hours** (the 15-minute minimum applies to Cloud Storage
+   transfers, not S3), so end-to-end latency is up to a day, not an hour. Fine
+   for budget history and a once-daily budget lifter; not for intraday
+   reaction. Authenticates with an IAM user access key (DTS cannot assume a
+   role), so scope it to `s3:GetObject`/`s3:ListBucket` on the one bucket and
+   rotate it. Set "ignore unknown values" so Amazon adding a field does not
+   fail the load.
 3. **SQS → Lambda → BigQuery.** The pattern in Amazon's reference
    implementation (amzn/amazon-marketing-stream-examples, CDK). Puts compute
    and a GCP service-account key in AWS. More to run and to secure than option 1

@@ -53,7 +53,7 @@ def transform(items: list[dict], day: dt.date) -> pd.DataFrame:
 
 
 def run(*, dry_run: bool = False, client: SpApiClient | None = None) -> int:
-    with run_logged("awd_inventory_daily") as ctx:
+    with run_logged("awd_inventory_daily", enabled=not dry_run) as ctx:
         sp = client or spapi_client_from_secrets()
         day = snapshot_date()
         df = transform(list(sp.awd_inventory()), day)

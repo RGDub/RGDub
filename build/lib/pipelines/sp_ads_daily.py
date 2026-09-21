@@ -215,7 +215,7 @@ def run(start: dt.date | None = None, end: dt.date | None = None, *, dry_run: bo
     """Pull the window from the Ads API and replace it in the master table. Returns rows loaded."""
     if start is None or end is None:
         start, end = default_window()
-    with run_logged("sp_ads_daily") as ctx:
+    with run_logged("sp_ads_daily", enabled=not dry_run) as ctx:
         client = client or ads_client_from_secrets()
         rows = fetch(client, start, end)
         if not rows:

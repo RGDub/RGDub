@@ -58,7 +58,7 @@ def transform(texts: list[str]) -> pd.DataFrame:
 
 
 def run(*, dry_run: bool = False, client: SpApiClient | None = None) -> int:
-    with run_logged("sp_settlements_daily") as ctx:
+    with run_logged("sp_settlements_daily", enabled=not dry_run) as ctx:
         sp = client or spapi_client_from_secrets()
         now = dt.datetime.now(dt.timezone.utc)
         reports = sp.list_reports([REPORT_TYPE], now - dt.timedelta(days=LOOKBACK_DAYS), now)

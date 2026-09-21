@@ -84,7 +84,7 @@ def gap(bq, now: dt.datetime | None = None) -> tuple[dt.datetime, dt.datetime]:
 
 
 def run(*, dry_run: bool = False, client: SpApiClient | None = None) -> int:
-    with run_logged("sp_pending_finances_daily") as ctx:
+    with run_logged("sp_pending_finances_daily", enabled=not dry_run) as ctx:
         sp = client or spapi_client_from_secrets()
         bq = bqlib.client()
         start, end = gap(bq)

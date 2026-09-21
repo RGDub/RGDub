@@ -103,3 +103,4 @@ for repo, mapping in PLAN.items():
             break
         time.sleep(5)
     print("  release now points at:", after.split("/")[-1][:12], "(changed)" if after != before else "(UNCHANGED)")
+    print("  now run release.py to move the release pin to this commit")

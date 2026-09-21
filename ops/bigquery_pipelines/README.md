@@ -7,9 +7,14 @@ The two scheduled pipelines live in Dataform repositories with no git remote:
 | `eb6fd087-cb1a-4bef-84df-1f622a1c1843` | PL-AMZSales-PunDataPipe-DailyActivity | 07:00 daily |
 | `2ceefade-8ee6-4519-9540-de19149d2f3a` | AMZSales-DailyInventory | 15:00 daily |
 
-Each release config is pinned to a compilation result, so a commit alone changes
-nothing: commit, then create a compilation result from the release config, then
-confirm the release now points at it. Both scripts do all three.
+Each release config is pinned to a compilation result and scheduled runs use
+that pin. Committing to main does not move it, and neither does creating a
+compilation result by hand. Only a release does, and re-saving the release
+config triggers one. So every deploy is: run the deploy script (commit), then
+`release.py` (move the pin, optionally start a run).
+
+- `release.py` — re-release both pipelines at head of main; `--run` /
+  `--run-inventory` also start a workflow invocation immediately.
 
 - `deploy_shim.py` — step 1 (2026-09-21): prepend `secret_shim_cell.py` to every
   notebook so scheduled runs survive the runtime image dropping

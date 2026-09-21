@@ -5,7 +5,7 @@
 -- truth for an hour is SUM over de-duplicated records, never "latest wins".
 
 CREATE TABLE IF NOT EXISTS `punlabs.AMZSales.ads_stream_raw` (
-  dataset_id        STRING    NOT NULL,   -- sp-traffic, sp-conversion, budget-usage, campaigns, ...
+  dataset_id        STRING    NOT NULL,   -- sp-traffic, sp-conversion, budget-usage, ads-campaign-management-*
   idempotency_id    STRING    NOT NULL,   -- Amazon's per-record id; de-dup key
   advertiser_id     STRING,
   marketplace_id    STRING,
@@ -70,19 +70,27 @@ SELECT
 FROM dedup
 GROUP BY 1, 2, 3, 4, 5, 6, 7;
 
--- Latest known ad -> SKU/ASIN mapping from the `ads` entity dataset, for
--- joining stream rows to the SKU grain sp_performance_master uses.
+-- Latest known ad -> SKU/ASIN mapping from the `ads-campaign-management-ads`
+-- entity dataset, for joining stream rows to the SKU grain
+-- sp_performance_master uses. The advertised product sits under
+-- creative.product_creative.product_creative_settings.advertised_product with a
+-- product_id + product_id_type (ASIN | SKU) pair, and a resolved_* pair for the
+-- product Amazon actually matched it to.
 CREATE OR REPLACE VIEW `punlabs.AMZSales.v_sp_ads_dim` AS
 SELECT * EXCEPT (rn) FROM (
   SELECT
     ad_id, ad_group_id, campaign_id,
-    STRING(payload.sku)   AS sku,
-    STRING(payload.asin)  AS asin,
+    IF(STRING(ap.product_id_type) = 'SKU',  STRING(ap.product_id),          NULL) AS sku,
+    COALESCE(
+      IF(STRING(ap.product_id_type) = 'ASIN',          STRING(ap.product_id),          NULL),
+      IF(STRING(ap.resolved_product_id_type) = 'ASIN', STRING(ap.resolved_product_id), NULL)
+    ) AS asin,
     STRING(payload.state) AS state,
     received_at           AS as_of,
     ROW_NUMBER() OVER (PARTITION BY ad_id ORDER BY received_at DESC) AS rn
-  FROM `punlabs.AMZSales.ads_stream_raw`
-  WHERE dataset_id = 'ads'
+  FROM `punlabs.AMZSales.ads_stream_raw`,
+       UNNEST([payload.creative.product_creative.product_creative_settings.advertised_product]) AS ap
+  WHERE dataset_id = 'ads-campaign-management-ads'
 )
 WHERE rn = 1;
 

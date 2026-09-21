@@ -46,13 +46,13 @@ STREAM_SUB_MEDIA_TYPE = (
 )
 
 # Secret Manager ids. Create them once with:
-#   gcloud secrets create amazon-ads-client-id --data-file=- <<< "$CLIENT_ID"
+#   gcloud secrets create amz-ads-client-id --data-file=- <<< "$CLIENT_ID"
 # and grant amzsales@punlabs.iam.gserviceaccount.com secretAccessor on each.
 SECRET_IDS = {
-    "client_id": "amazon-ads-client-id",
-    "client_secret": "amazon-ads-client-secret",
-    "refresh_token": "amazon-ads-refresh-token",
-    "profile_id": "amazon-ads-profile-id",
+    "client_id": "amz-ads-client-id",
+    "client_secret": "amz-ads-client-secret",
+    "refresh_token": "amz-ads-refresh-token",
+    "profile_id": "amz-ads-profile-id",
 }
 
 
@@ -219,6 +219,26 @@ class AdsApiClient:
         log.info("created report %s (%s %s..%s)", report_id,
                  body.get("configuration", {}).get("reportTypeId"), body.get("startDate"), body.get("endDate"))
         return self.download_report(self.wait_for_report(report_id, timeout_s=timeout_s))
+
+    # ------------------------------------------- Ads API v1 campaign management
+    def query_entities(self, kind: str, ad_product: str = "SPONSORED_PRODUCTS",
+                       page_size: int = 1000, **filters) -> Iterable[dict]:
+        """Page through ``POST /adsApi/v1/query/{kind}`` (campaigns | adGroups | ads | targets).
+
+        Yields entities in the v1 common model (camelCase). ``filters`` are passed
+        through as extra body fields, e.g. ``stateFilter={"include": ["ENABLED"]}``.
+        """
+        if kind not in ("campaigns", "adGroups", "ads", "targets"):
+            raise ValueError(f"unknown entity kind {kind!r}")
+        body: dict[str, Any] = {"adProductFilter": {"include": [ad_product]}, "maxResults": page_size, **filters}
+        while True:
+            data = self.request("POST", f"/adsApi/v1/query/{kind}", content_type="application/json",
+                                json_body=body).json()
+            yield from data.get(kind, [])
+            token = data.get("nextToken")
+            if not token:
+                return
+            body["nextToken"] = token
 
     # ------------------------------------------------- Marketing Stream subs
     def create_stream_subscription(

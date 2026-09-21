@@ -6,7 +6,7 @@ your AWS account; ``poller.py`` drains that queue into BigQuery.
     python -m pipelines.ads_stream.subscribe list
     python -m pipelines.ads_stream.subscribe create \
         --queue-arn arn:aws:sqs:us-east-1:123456789012:amazon-marketing-stream \
-        --datasets sp-traffic sp-conversion budget-usage campaigns adgroups ads
+        --datasets sp-traffic sp-conversion budget-usage ads-campaign-management-campaigns
 
 The queue must already allow Amazon's SNS topics to ``sqs:SendMessage`` (see
 docs/ADS_STREAM.md). After ``create`` run the poller: it confirms the SNS
@@ -21,7 +21,11 @@ import logging
 
 from pipelines.lib.ads_api import ads_client_from_secrets
 
-DEFAULT_DATASETS = ["sp-traffic", "sp-conversion", "budget-usage", "campaigns", "adgroups", "ads"]
+DEFAULT_DATASETS = [
+    "sp-traffic", "sp-conversion", "budget-usage",
+    "ads-campaign-management-campaigns", "ads-campaign-management-adgroups",
+    "ads-campaign-management-ads", "ads-campaign-management-targets",
+]
 
 
 def main() -> None:

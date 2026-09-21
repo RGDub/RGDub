@@ -70,7 +70,7 @@ and always reflects Amazon's latest restatements. It is implemented in
 ```bash
 # 1. Credentials into Secret Manager (values from the "Amazon Developer
 #    Credentials" Drive doc; then delete them from the doc).
-for s in amazon-ads-client-id amazon-ads-client-secret amazon-ads-refresh-token amazon-ads-profile-id; do
+for s in amz-ads-client-id amz-ads-client-secret amz-ads-refresh-token amz-ads-profile-id; do
   printf '%s' "$VALUE" | gcloud secrets create $s --project punlabs --data-file=-
   gcloud secrets add-iam-policy-binding $s --project punlabs \
     --member serviceAccount:amzsales@punlabs.iam.gserviceaccount.com \
@@ -80,7 +80,7 @@ done
 #   python - <<'PY'
 #   from pipelines.lib.secrets import get_secret
 #   from pipelines.lib.ads_api import AdsApiClient
-#   c = AdsApiClient(get_secret("amazon-ads-client-id"), get_secret("amazon-ads-client-secret"), get_secret("amazon-ads-refresh-token"))
+#   c = AdsApiClient(get_secret("amz-ads-client-id"), get_secret("amz-ads-client-secret"), get_secret("amz-ads-refresh-token"))
 #   print(c.list_profiles())
 #   PY
 
@@ -120,9 +120,12 @@ Cost: nothing new. This runs inside the existing schedule.
 
 Marketing Stream is Amazon's push feed. It delivers Sponsored Products /
 Brands / Display traffic and conversion records at hourly grain within minutes
-of the hour closing, plus event-driven datasets: `campaigns`, `adgroups`, `ads`,
-`targets` (entity changes), `budget-usage` (budget consumed per campaign,
-published as it changes), and `sp-budget-recommendations`. There are ~45
+of the hour closing, plus event-driven datasets: `ads-campaign-management-campaigns`,
+`-adgroups`, `-ads`, `-targets` (entity changes, in the new Campaign
+Management API shape), `budget-usage` (budget consumed per campaign, published
+at every 5% step), and `sp-budget-recommendations`. The short-named entity
+datasets (`campaigns`, `adgroups`, ...) are the older generation and are slated
+for deprecation; do not subscribe to them. There are ~45
 dataset variants across the NA/EU/FE regions; the ones we'd want are
 `sp-traffic`, `sp-conversion`, `budget-usage`, and the entity datasets.
 
@@ -147,9 +150,48 @@ dataset variants across the NA/EU/FE regions; the ones we'd want are
   `SUM` of all records for that hour after de-duplicating on `idempotency_id`.
   Negative values are legitimate (a restatement). Never "upsert latest".
 - **No SKU in the stream.** `sp-traffic`/`sp-conversion` are keyed by
-  `ad_id`. Advertised SKU/ASIN comes from the `ads` entity dataset or a nightly
-  pull of product ads. Keep `dim_sp_ads(ad_id, ad_group_id, campaign_id, sku,
+  `ad_id`. Advertised SKU/ASIN comes from the `ads-campaign-management-ads`
+  entity dataset (nested under `creative.product_creative...advertised_product`)
+  or a nightly pull of product ads.
+- **No "who" in entity events.** The entity datasets carry
+  `creation_date_time` / `last_updated_date_time` but no user or actor field.
+  Attributing a change to a consultant means correlating on time with who has
+  console access, or reading the console's change history separately.
+- **Not every dataset has `idempotency_id`.** `sp-traffic`/`sp-conversion` do;
+  `budget-usage` and the campaign-management datasets do not. The poller falls
+  back to a content hash so redeliveries still collapse. Keep `dim_sp_ads(ad_id, ad_group_id, campaign_id, sku,
   asin, valid_from, valid_to)` and join at query time.
+
+### As built (2026-09-21)
+
+- AWS account 483692969999, IAM user `AMZ-Ads-Stream` (long-lived key on
+  Grant's Mac; CLI default region us-east-2, but the queue is in us-east-1).
+- Queue `arn:aws:sqs:us-east-1:483692969999:amazon-marketing-stream`,
+  14-day retention, DLQ `amazon-marketing-stream-dlq` after 5 receives.
+  Policy allows `sns.amazonaws.com` from the seven NA dataset topics plus
+  Amazon's `ReviewerRole` for `GetQueueAttributes` (the per-dataset account
+  ids are in the data guide's per-dataset pages).
+- Subscriptions ACTIVE for the US profile (3874455790835941) on: `sp-traffic`,
+  `sp-conversion`, `budget-usage`, `ads-campaign-management-campaigns`,
+  `-adgroups`, `-ads`, `-targets`. Created via the API, confirmed by fetching
+  each `SubscribeURL`.
+- BigQuery landing: `AMZSales.ads_stream_raw` (+ `v_sp_traffic_hourly`,
+  `v_sp_conversion_hourly`, `v_sp_ads_dim`) from `sql/ads_stream/ddl.sql`, and
+  `AMZSales.ads_entity_log` (+ `v_ads_entity_current`, `v_ads_campaigns_current`,
+  `v_ads_targets_current`, `v_ads_adgroups_current`, `v_ads_ads_current`,
+  `v_ads_entity_changes`) from `sql/ads_stream/entity_log.sql`.
+- Campaign structure baseline: `pipelines/ads_entities.py` pulled the full tree
+  through the Ads API v1 query endpoints (725 campaigns, 812 ad groups, 3,460
+  ads, 31,804 targets) into `ads_entity_log` as `source='snapshot'`. The stream
+  poller appends `ads-campaign-management-*` events to the same table as
+  `source='stream'`, so `v_ads_entity_changes` is the consultant change log.
+- The poller has run by hand and verified end to end (265 records). **Nothing is
+  consuming the queue on a schedule yet**; messages accumulate for 14 days until
+  the poller is deployed (Cloud Run job + Cloud Scheduler, see below).
+- Lesson: never run a receive loop that does not delete against a queue with a
+  redrive policy. A sample watcher re-received every message for 30 minutes and
+  `maxReceiveCount=5` moved all of them to the DLQ; they were redriven with
+  `start_message_move_task`.
 
 ### What is scaffolded in this repo
 

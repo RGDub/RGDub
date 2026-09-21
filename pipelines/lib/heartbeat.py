@@ -43,11 +43,18 @@ def _write(row: dict) -> None:
 
 
 @contextmanager
-def run_logged(pipeline: str):
-    """Record start/end of a pipeline run, including failures, then re-raise."""
+def run_logged(pipeline: str, enabled: bool = True):
+    """Record start/end of a pipeline run, including failures, then re-raise.
+
+    ``enabled=False`` (dry runs) yields the same context but writes nothing, so
+    rehearsals never show up as real runs in the log.
+    """
     context = RunContext(pipeline=pipeline)
     started = _dt.datetime.now(_dt.timezone.utc)
 
+    if not enabled:
+        yield context
+        return
     try:
         yield context
     except BaseException as exc:

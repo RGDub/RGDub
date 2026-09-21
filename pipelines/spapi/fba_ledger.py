@@ -56,7 +56,7 @@ def transform(tsv: str) -> pd.DataFrame:
 
 
 def run(*, dry_run: bool = False, client: SpApiClient | None = None, day: dt.date | None = None) -> int:
-    with run_logged("amz_fba_inv_ledger") as ctx:
+    with run_logged("amz_fba_inv_ledger", enabled=not dry_run) as ctx:
         sp = client or spapi_client_from_secrets()
         day = day or target_day()
         start = dt.datetime.combine(day, dt.time.min, tzinfo=dt.timezone.utc)

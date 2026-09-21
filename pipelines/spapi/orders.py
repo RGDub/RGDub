@@ -45,7 +45,7 @@ def transform(tsv: str) -> pd.DataFrame:
 
 
 def run(*, dry_run: bool = False, client: SpApiClient | None = None) -> int:
-    with run_logged("sp_orders_daily") as ctx:
+    with run_logged("sp_orders_daily", enabled=not dry_run) as ctx:
         sp = client or spapi_client_from_secrets()
         start, end = window()
         df = transform(sp.run_report(REPORT_TYPE, start, end))

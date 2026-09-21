@@ -61,7 +61,7 @@ def transform(report_json: str | dict, day: dt.date) -> pd.DataFrame:
 
 
 def run(*, dry_run: bool = False, client: SpApiClient | None = None, pause_s: int = 45) -> int:
-    with run_logged("sp_traffic_daily") as ctx:
+    with run_logged("sp_traffic_daily", enabled=not dry_run) as ctx:
         sp = client or spapi_client_from_secrets()
         bq = None if dry_run else bqlib.client()
         schema = None if dry_run else bqlib.table_schema(bq, TABLE)

@@ -74,7 +74,7 @@ def transform(invoices: list[dict]) -> pd.DataFrame:
 
 
 def run(*, dry_run: bool = False, client: AdsApiClient | None = None) -> int:
-    with run_logged("ads_invoices_daily") as ctx:
+    with run_logged("ads_invoices_daily", enabled=not dry_run) as ctx:
         ads = client or ads_client_from_secrets()
         today = dt.date.today()
         invoices = list_invoices(ads, today - dt.timedelta(days=LOOKBACK_DAYS), today)

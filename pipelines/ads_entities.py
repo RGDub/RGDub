@@ -93,7 +93,7 @@ def load(bq, rows: list[dict]) -> int:
 
 
 def run(*, dry_run: bool = False, client: AdsApiClient | None = None, ad_product: str = "SPONSORED_PRODUCTS") -> int:
-    with run_logged("ads_entities_snapshot") as ctx:
+    with run_logged("ads_entities_snapshot", enabled=not dry_run) as ctx:
         client = client or ads_client_from_secrets()
         pulled = snapshot(client, ad_product=ad_product)
         rows = [r for kind_rows in pulled.values() for r in kind_rows]

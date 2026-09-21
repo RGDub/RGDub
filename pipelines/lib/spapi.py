@@ -65,7 +65,7 @@ class SpApiClient:
     region: str = "NA"
     marketplace_id: str = MARKETPLACE_US
     session: requests.Session = field(default_factory=requests.Session)
-    max_retries: int = 6
+    max_retries: int = 8
     _access_token: str | None = field(default=None, repr=False)
     _token_expires_at: float = field(default=0.0, repr=False)
 
@@ -106,7 +106,9 @@ class SpApiClient:
             if not retryable or attempt == self.max_retries:
                 raise SpApiError(f"{method} {path} -> HTTP {resp.status_code}: {resp.text[:500]}",
                                  resp.status_code, resp.text)
-            wait = float(resp.headers.get("Retry-After") or delay)
+            # createReport is limited to ~1/min with a small burst; a 429 there
+            # needs a real pause, not a two-second one.
+            wait = float(resp.headers.get("Retry-After") or max(delay, 15.0 if resp.status_code == 429 else 0))
             log.warning("SP-API %s %s returned %s; retrying in %.0fs (%d/%d)",
                         method, path, resp.status_code, wait, attempt, self.max_retries)
             time.sleep(wait)

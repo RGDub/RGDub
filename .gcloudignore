@@ -1,0 +1,9 @@
+.git
+.venv
+dist
+*.egg-info
+tests
+docs
+ops/bigquery_pipelines
+sql
+__pycache__

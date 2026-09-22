@@ -13,6 +13,9 @@ commit to main, compile from the release config, point the pin at it.
     python release.py                 # release head of main on both pipelines
     python release.py --run           # ...and start Daily Activity now
     python release.py --run-inventory # ...and/or Daily Inventory
+    python release.py --pin eb6fd087=<compilationResultId> [--pin 2ceefade=<id>]
+                                      # roll a pipeline back to an earlier compilation
+                                      # (known good: eb6fd087=d1e8a4f0-6cb..., 2ceefade=20950fad-305...)
 """
 import subprocess, sys, time
 import requests
@@ -33,10 +36,22 @@ def call(method, url, **kw):
     return r.json() if r.text else {}
 
 
+PINS = {a.split("=")[0]: a.split("=")[1] for a in sys.argv[sys.argv.index("--pin") + 1:] if "=" in a} if "--pin" in sys.argv else {}
+
 for repo, (name, workflow, flag) in REPOS.items():
     print(f"\n=== {name}")
-    head = call("GET", f"{B}/{repo}:fetchHistory?pageSize=1")["commits"][0]["commitSha"]
     rc = f"{B}/{repo}/releaseConfigs/default"
+    if PINS:
+        wanted = PINS.get(repo[:8])
+        if not wanted:
+            continue
+        full = next(c["name"] for c in call("GET", f"{B}/{repo}/compilationResults?pageSize=200")["compilationResults"]
+                    if c["name"].split("/")[-1].startswith(wanted))
+        r = requests.patch(f"{rc}?updateMask=releaseCompilationResult", headers=H,
+                           json={"gitCommitish": "main", "releaseCompilationResult": full}, timeout=120)
+        print(f"  rollback -> {full.split('/')[-1][:12]}: HTTP {r.status_code}")
+        continue
+    head = call("GET", f"{B}/{repo}:fetchHistory?pageSize=1")["commits"][0]["commitSha"]
     cfg = call("GET", rc)
     if cfg.get("gitCommitish") != "main":
         call("PATCH", f"{rc}?updateMask=gitCommitish", json={"gitCommitish": "main"})

@@ -98,8 +98,76 @@ def run(*, dry_run: bool = False, client: SpApiClient | None = None, pause_s: in
         return total
 
 
-if __name__ == "__main__":
-    import sys
+def missing_days(bq) -> list[dt.date]:
+    """Dates between the table's first and last day that have no rows."""
+    sql = f"""
+    WITH span AS (SELECT MIN(date) mn, MAX(date) mx FROM `{TABLE}`),
+    have AS (SELECT DISTINCT date FROM `{TABLE}`)
+    SELECT d FROM span, UNNEST(GENERATE_DATE_ARRAY(span.mn, span.mx)) d
+    LEFT JOIN have ON have.date = d WHERE have.date IS NULL ORDER BY d"""
+    return [r.d for r in bq.query(sql).result()]
 
+
+def backfill(dates: list[dt.date], *, client: SpApiClient | None = None, pause_s: int = 45,
+             retries: int = 2) -> dict[str, list[dt.date]]:
+    """Load exactly ``dates``, one report each. A failed day is logged and retried at
+    the end; only days that still fail after ``retries`` passes are reported. Replaces
+    the hand-edited PunData-HistDailyTrafficETL notebook.
+
+        python -m pipelines.spapi.traffic --backfill --start 2026-06-17 --end 2026-07-20
+        python -m pipelines.spapi.traffic --backfill --missing      # every gap in the table
+    """
+    with run_logged("sp_traffic_backfill") as ctx:
+        sp = client or spapi_client_from_secrets()
+        bq = bqlib.client()
+        schema = bqlib.table_schema(bq, TABLE)
+        done, empty, failed = [], [], list(dates)
+        for attempt in range(1, retries + 2):
+            todo, failed = failed, []
+            if not todo:
+                break
+            log.info("backfill pass %d: %d day(s)", attempt, len(todo))
+            for day in todo:
+                try:
+                    start = dt.datetime.combine(day, dt.time.min, tzinfo=dt.timezone.utc)
+                    end = dt.datetime.combine(day, dt.time(23, 59, 59), tzinfo=dt.timezone.utc)
+                    df = transform(sp.run_report(REPORT_TYPE, start, end, timeout_s=900,
+                                                 report_options={"dateGranularity": "DAY", "asinGranularity": "SKU"}), day)
+                    if df.empty:
+                        log.warning("%s: Amazon returned no ASIN rows", day)
+                        empty.append(day)
+                    else:
+                        ctx.rows_written += bqlib.replace_window(bq, df, TABLE, where=f"date = DATE('{day}')", schema=schema)
+                        done.append(day)
+                        log.info("%s: %d rows", day, len(df))
+                except Exception as exc:  # noqa: BLE001 - one bad day must not stop the rest
+                    log.error("%s: %s", day, str(exc)[:200])
+                    failed.append(day)
+                time.sleep(pause_s)
+        log.info("backfill finished: %d loaded, %d empty at Amazon, %d failed", len(done), len(empty), len(failed))
+        if failed:
+            log.error("still missing after retries: %s", ", ".join(map(str, failed)))
+        return {"loaded": done, "empty": empty, "failed": failed}
+
+
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--backfill", action="store_true", help="load explicit days instead of the trailing window")
+    ap.add_argument("--start", type=dt.date.fromisoformat)
+    ap.add_argument("--end", type=dt.date.fromisoformat)
+    ap.add_argument("--missing", action="store_true", help="with --backfill: every day the table is missing")
+    args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    print(run(dry_run="--dry-run" in sys.argv))
+    if args.backfill:
+        if args.missing:
+            days_to_load = missing_days(bqlib.client())
+        elif args.start and args.end:
+            days_to_load = [args.start + dt.timedelta(days=i) for i in range((args.end - args.start).days + 1)]
+        else:
+            ap.error("--backfill needs --missing or --start/--end")
+        print(backfill(days_to_load))
+    else:
+        print(run(dry_run=args.dry_run))

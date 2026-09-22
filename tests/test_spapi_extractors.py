@@ -111,3 +111,22 @@ def test_awd_transform_flattens_quantities_and_expiration():
     assert row["totalOnhandQuantity"] == 100 and row["totalInboundQuantity"] == 5
     assert row["earliestExpirationDate"] == "2027-01-31" and row["Parent SKU"] == "KPOP-CPNCLS"
     assert awd_inventory.snapshot_date(dt.datetime(2026, 9, 21, 20, tzinfo=dt.timezone.utc)) == dt.date(2026, 9, 20)
+
+
+def test_clients_retry_dropped_connections(monkeypatch):
+    import requests
+    from pipelines.lib.spapi import SpApiClient
+    from pipelines.lib.ads_api import AdsApiClient
+
+    class Flaky:
+        def __init__(self): self.n = 0
+        def request(self, *a, **k):
+            self.n += 1
+            if self.n == 1:
+                raise requests.exceptions.ConnectionError("Remote end closed connection")
+            r = requests.Response(); r.status_code = 200; r._content = b'{"ok": true}'; return r
+
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    for c in (SpApiClient("i", "s", "r"), AdsApiClient("i", "s", "r", profile_id="1")):
+        c.session = Flaky(); c._access_token = "t"; c._token_expires_at = 9e12
+        assert c.request("GET", "/x").json() == {"ok": True} and c.session.n == 2

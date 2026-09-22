@@ -146,14 +146,23 @@ class AdsApiClient:
         url = path if path.startswith("http") else f"{self.base_url}{path}"
         delay = 2.0
         for attempt in range(1, self.max_retries + 1):
-            resp = self.session.request(
-                method,
-                url,
-                headers=self._headers(content_type, scoped),
-                json=json_body,
-                params=params,
-                timeout=timeout,
-            )
+            try:
+                resp = self.session.request(
+                    method,
+                    url,
+                    headers=self._headers(content_type, scoped),
+                    json=json_body,
+                    params=params,
+                    timeout=timeout,
+                )
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+                # Amazon occasionally drops a long-lived connection; treat like a 5xx.
+                if attempt == self.max_retries:
+                    raise
+                log.warning("Ads API %s %s: %s; retrying in %.0fs (%d/%d)", method, path, exc, delay, attempt, self.max_retries)
+                time.sleep(delay)
+                delay = min(delay * 2, 120)
+                continue
             if resp.status_code < 400:
                 return resp
             retryable = resp.status_code == 429 or resp.status_code >= 500

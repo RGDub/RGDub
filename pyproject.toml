@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "punlabs-pipelines"
-version = "0.1.5"
+version = "0.1.6"
 description = "Amazon SP-API, Ads API and Marketing Stream extractors feeding punlabs.AMZSales in BigQuery"
 requires-python = ">=3.10"
 dependencies = [

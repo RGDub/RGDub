@@ -23,6 +23,7 @@ import gzip
 import io
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -186,7 +187,16 @@ class AdsApiClient:
 
     # ---------------------------------------------------------------- reports
     def create_report(self, body: dict) -> str:
-        resp = self.request("POST", "/reporting/reports", content_type=REPORT_V3_MEDIA_TYPE, json_body=body)
+        try:
+            resp = self.request("POST", "/reporting/reports", content_type=REPORT_V3_MEDIA_TYPE, json_body=body)
+        except AdsApiError as exc:
+            # Amazon de-duplicates identical report requests for a while and
+            # answers 425 with the id of the report it already has. Use it.
+            match = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", exc.body or "")
+            if exc.status == 425 and match:
+                log.info("report request is a duplicate; reusing report %s", match.group(0))
+                return match.group(0)
+            raise
         return resp.json()["reportId"]
 
     def get_report(self, report_id: str) -> dict:

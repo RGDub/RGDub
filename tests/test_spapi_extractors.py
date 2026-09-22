@@ -130,3 +130,17 @@ def test_clients_retry_dropped_connections(monkeypatch):
     for c in (SpApiClient("i", "s", "r"), AdsApiClient("i", "s", "r", profile_id="1")):
         c.session = Flaky(); c._access_token = "t"; c._token_expires_at = 9e12
         assert c.request("GET", "/x").json() == {"ok": True} and c.session.n == 2
+
+
+def test_ads_create_report_reuses_duplicate_on_425():
+    import requests
+    from pipelines.lib.ads_api import AdsApiClient
+
+    class Dup:
+        def request(self, *a, **k):
+            r = requests.Response(); r.status_code = 425
+            r._content = b'{"code":"425","detail":"The Request is a duplicate of : a7d36bd0-084b-49a4-a796-20b59735422b"}'
+            return r
+
+    c = AdsApiClient("i", "s", "r", profile_id="1"); c.session = Dup(); c._access_token = "t"; c._token_expires_at = 9e12
+    assert c.create_report({"name": "x"}) == "a7d36bd0-084b-49a4-a796-20b59735422b"

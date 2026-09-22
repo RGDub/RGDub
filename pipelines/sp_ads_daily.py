@@ -47,6 +47,7 @@ MASTER_TABLE = f"{PROJECT}.{DATASET}.sp_performance_master"
 STAGING_TABLE = f"{PROJECT}.{DATASET}._sp_load_staging"
 
 WINDOW_DAYS = 31          # longest attribution window in the table is 30d
+REPORT_TIMEOUT_S = 3600   # per 31-day report chunk
 REPORT_LAG_DAYS = 1       # Amazon's daily report for D is complete on D+1
 
 # Everything the existing table stores, plus the three grain columns.
@@ -140,7 +141,9 @@ def check_grain(rows: list[dict]) -> None:
 def fetch(client: AdsApiClient, start: dt.date, end: dt.date) -> list[dict]:
     rows: list[dict] = []
     for chunk_start, chunk_end in chunk_date_range(start, end, max_days=31):
-        rows.extend(client.run_report(report_body(chunk_start, chunk_end)))
+        # Amazon's generation time for a 31-day report swings from 8 to 40+
+        # minutes depending on time of day; the 07:00 ET run has seen >30.
+        rows.extend(client.run_report(report_body(chunk_start, chunk_end), timeout_s=REPORT_TIMEOUT_S))
     return transform(rows)
 
 

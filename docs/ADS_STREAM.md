@@ -185,9 +185,12 @@ dataset variants across the NA/EU/FE regions; the ones we'd want are
   ads, 31,804 targets) into `ads_entity_log` as `source='snapshot'`. The stream
   poller appends `ads-campaign-management-*` events to the same table as
   `source='stream'`, so `v_ads_entity_changes` is the consultant change log.
-- The poller has run by hand and verified end to end (265 records). **Nothing is
-  consuming the queue on a schedule yet**; messages accumulate for 14 days until
-  the poller is deployed (Cloud Run job + Cloud Scheduler, see below).
+- **The poller is scheduled** (2026-09-22): Cloud Run job `ads-stream-poller`
+  in us-central1, triggered by Cloud Scheduler every 5 minutes, running as
+  `amzsales@`. AWS access is a least-privilege IAM user `ads-stream-poller`
+  (SQS receive/delete/get-attributes on the queue and DLQ) whose key lives in
+  Secret Manager (`aws-ads-stream-key-id`, `aws-ads-stream-secret`). Setup is
+  `ops/cloud_run/setup.sh`; each run writes an `ads_stream_poller` heartbeat.
 - Lesson: never run a receive loop that does not delete against a queue with a
   redrive policy. A sample watcher re-received every message for 30 minutes and
   `maxReceiveCount=5` moved all of them to the DLQ; they were redriven with

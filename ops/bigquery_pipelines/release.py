@@ -31,25 +31,39 @@ def call(method, url, **kw):
 for repo, (name, workflow, flag) in REPOS.items():
     print(f"\n=== {name}")
     head = call("GET", f"{B}/{repo}:fetchHistory?pageSize=1")["commits"][0]["commitSha"]
-    before = call("GET", f"{B}/{repo}/releaseConfigs/default").get("releaseCompilationResult", "")
-    call("PATCH", f"{B}/{repo}/releaseConfigs/default?updateMask=gitCommitish", json={"gitCommitish": "main"})
+    cfg = call("GET", f"{B}/{repo}/releaseConfigs/default")
+    before = cfg.get("releaseCompilationResult", "")
+    # A release only fires when the config actually changes, so pin it to the
+    # head commit SHA. Re-running at the same head bounces through "main" first.
+    if cfg.get("gitCommitish") == head:
+        call("PATCH", f"{B}/{repo}/releaseConfigs/default?updateMask=gitCommitish", json={"gitCommitish": "main"})
+        time.sleep(3)
+    call("PATCH", f"{B}/{repo}/releaseConfigs/default?updateMask=gitCommitish", json={"gitCommitish": head})
     after, resolved = before, ""
-    for _ in range(12):
+    for _ in range(18):
         time.sleep(5)
         cfg = call("GET", f"{B}/{repo}/releaseConfigs/default")
         after = cfg.get("releaseCompilationResult", "")
         if after and after != before:
-            comp = call("GET", f"https://dataform.googleapis.com/v1beta1/{after}")
-            resolved = comp.get("resolvedGitCommitSha", "")
-            errs = comp.get("compilationErrors", [])
-            print(f"  release -> {after.split('/')[-1][:12]} from commit {resolved[:8]} (head {head[:8]}); errors: {len(errs)}")
-            for e in errs[:5]:
-                print("    ", e.get("path"), e.get("message", "")[:160])
             break
-    else:
-        print(f"  pin did not move (still {before.split('/')[-1][:12]}); records:",
-              cfg.get("recentScheduledReleaseRecords"))
+    if after == before:
+        # Fall back to compiling from the release config and pointing the pin at it explicitly.
+        comp = call("POST", f"{B}/{repo}/compilationResults",
+                    json={"releaseConfig": f"projects/punlabs/locations/us-central1/repositories/{repo}/releaseConfigs/default"})
+        call("PATCH", f"{B}/{repo}/releaseConfigs/default?updateMask=releaseCompilationResult",
+             json={"releaseCompilationResult": comp["name"]})
+        time.sleep(3)
+        cfg = call("GET", f"{B}/{repo}/releaseConfigs/default")
+        after = cfg.get("releaseCompilationResult", "")
+    if not after or after == before:
+        print(f"  pin did not move (still {before.split('/')[-1][:12]}); gitCommitish now {cfg.get('gitCommitish','?')[:8]}")
         continue
+    comp = call("GET", f"https://dataform.googleapis.com/v1beta1/{after}")
+    resolved = comp.get("resolvedGitCommitSha", "")
+    errs = comp.get("compilationErrors", [])
+    print(f"  release -> {after.split('/')[-1][:12]} from commit {resolved[:8]} (head {head[:8]}); errors: {len(errs)}")
+    for e in errs[:5]:
+        print("    ", e.get("path"), e.get("message", "")[:160])
     if resolved and resolved != head:
         print("  WARNING: release is not at head of main")
     if flag in sys.argv:

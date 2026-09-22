@@ -61,7 +61,9 @@ SELECT
 FROM `punlabs.AMZSales.v_ads_entity_current`
 WHERE entity_type = 'campaign';
 
--- Targets, flattened: what is targeted and at what bid.
+-- Targets, flattened: what is targeted and at what bid. The API snapshot gives
+-- keyword_target.keyword as a string; stream events nest it one level deeper
+-- (keyword_target.keyword.keyword), hence the COALESCE.
 CREATE OR REPLACE VIEW `punlabs.AMZSales.v_ads_targets_current` AS
 SELECT
   entity_id AS target_id,
@@ -70,7 +72,7 @@ SELECT
   SAFE_CAST(JSON_VALUE(payload, '$.negative') AS BOOL) AS negative,
   JSON_VALUE(payload, '$.target_level') AS target_level,
   JSON_VALUE(payload, '$.target_type')  AS target_type,
-  JSON_VALUE(payload, '$.target_details.keyword_target.keyword')     AS keyword,
+  COALESCE(JSON_VALUE(payload, '$.target_details.keyword_target.keyword'), JSON_VALUE(payload, '$.target_details.keyword_target.keyword.keyword'))     AS keyword,
   JSON_VALUE(payload, '$.target_details.keyword_target.match_type')  AS keyword_match_type,
   JSON_VALUE(payload, '$.target_details.product_target.product.product_id') AS product_id,
   JSON_VALUE(payload, '$.target_details.product_target.product_id_type')    AS product_id_type,
@@ -125,7 +127,7 @@ SELECT
   SAFE_CAST(JSON_VALUE(prev_payload, '$.budgets[0].budget_value.monetary_budget_value.monetary_budget.value') AS FLOAT64) AS prev_daily_budget,
   SAFE_CAST(JSON_VALUE(payload, '$.budgets[0].budget_value.monetary_budget_value.monetary_budget.value') AS FLOAT64)      AS daily_budget,
   JSON_VALUE(prev_payload, '$.name') AS prev_name, JSON_VALUE(payload, '$.name') AS name,
-  JSON_VALUE(payload, '$.target_details.keyword_target.keyword') AS keyword,
+  COALESCE(JSON_VALUE(payload, '$.target_details.keyword_target.keyword'), JSON_VALUE(payload, '$.target_details.keyword_target.keyword.keyword')) AS keyword,
   prev_payload, payload,
   prev_observed_at
 FROM ordered

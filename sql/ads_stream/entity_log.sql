@@ -41,22 +41,22 @@ WHERE rn = 1;
 CREATE OR REPLACE VIEW `punlabs.AMZSales.v_ads_campaigns_current` AS
 SELECT
   entity_id AS campaign_id,
-  STRING(payload.name) AS name,
+  JSON_VALUE(payload, '$.name') AS name,
   state,
-  STRING(payload.portfolio_id) AS portfolio_id,
-  FLOAT64(payload.budgets[0].budget_value.monetary_budget_value.monetary_budget.value) AS daily_budget,
+  JSON_VALUE(payload, '$.portfolio_id') AS portfolio_id,
+  SAFE_CAST(JSON_VALUE(payload, '$.budgets[0].budget_value.monetary_budget_value.monetary_budget.value') AS FLOAT64) AS daily_budget,
   STRING(payload.budgets[0].budget_type) AS budget_type,
   STRING(payload.budgets[0].recurrence_time_period) AS budget_period,
-  STRING(payload.optimizations.bid_settings.bid_strategy) AS bid_strategy,
-  (SELECT MAX(FLOAT64(a.percentage)) FROM UNNEST(JSON_QUERY_ARRAY(payload.optimizations.bid_settings.bid_adjustments.placement_bid_adjustments)) a
-     WHERE STRING(a.placement) = 'TOP_OF_SEARCH')  AS top_of_search_adj_pct,
-  (SELECT MAX(FLOAT64(a.percentage)) FROM UNNEST(JSON_QUERY_ARRAY(payload.optimizations.bid_settings.bid_adjustments.placement_bid_adjustments)) a
-     WHERE STRING(a.placement) = 'REST_OF_SEARCH') AS rest_of_search_adj_pct,
-  (SELECT MAX(FLOAT64(a.percentage)) FROM UNNEST(JSON_QUERY_ARRAY(payload.optimizations.bid_settings.bid_adjustments.placement_bid_adjustments)) a
-     WHERE STRING(a.placement) = 'PRODUCT_PAGE')   AS product_page_adj_pct,
-  STRING(payload.start_date_time) AS start_date_time,
-  STRING(payload.end_date_time)   AS end_date_time,
-  STRING(payload.status.delivery_status) AS delivery_status,
+  JSON_VALUE(payload, '$.optimizations.bid_settings.bid_strategy') AS bid_strategy,
+  (SELECT MAX(SAFE_CAST(JSON_VALUE(a, '$.percentage') AS FLOAT64)) FROM UNNEST(JSON_QUERY_ARRAY(payload.optimizations.bid_settings.bid_adjustments.placement_bid_adjustments)) a
+     WHERE JSON_VALUE(a, '$.placement') = 'TOP_OF_SEARCH')  AS top_of_search_adj_pct,
+  (SELECT MAX(SAFE_CAST(JSON_VALUE(a, '$.percentage') AS FLOAT64)) FROM UNNEST(JSON_QUERY_ARRAY(payload.optimizations.bid_settings.bid_adjustments.placement_bid_adjustments)) a
+     WHERE JSON_VALUE(a, '$.placement') = 'REST_OF_SEARCH') AS rest_of_search_adj_pct,
+  (SELECT MAX(SAFE_CAST(JSON_VALUE(a, '$.percentage') AS FLOAT64)) FROM UNNEST(JSON_QUERY_ARRAY(payload.optimizations.bid_settings.bid_adjustments.placement_bid_adjustments)) a
+     WHERE JSON_VALUE(a, '$.placement') = 'PRODUCT_PAGE')   AS product_page_adj_pct,
+  JSON_VALUE(payload, '$.start_date_time') AS start_date_time,
+  JSON_VALUE(payload, '$.end_date_time')   AS end_date_time,
+  JSON_VALUE(payload, '$.status.delivery_status') AS delivery_status,
   last_updated, observed_at, source
 FROM `punlabs.AMZSales.v_ads_entity_current`
 WHERE entity_type = 'campaign';
@@ -67,18 +67,18 @@ SELECT
   entity_id AS target_id,
   campaign_id, ad_group_id,
   state,
-  BOOL(payload.negative) AS negative,
-  STRING(payload.target_level) AS target_level,
-  STRING(payload.target_type)  AS target_type,
-  STRING(payload.target_details.keyword_target.keyword)     AS keyword,
-  STRING(payload.target_details.keyword_target.match_type)  AS keyword_match_type,
-  STRING(payload.target_details.product_target.product.product_id) AS product_id,
-  STRING(payload.target_details.product_target.product_id_type)    AS product_id_type,
-  STRING(payload.target_details.product_target.match_type)         AS product_match_type,
-  STRING(payload.target_details.theme_target.match_type)           AS theme_match_type,
-  STRING(payload.target_details.product_category_target.product_category_refinement.product_category_refinement.product_category_id) AS product_category_id,
-  FLOAT64(payload.bid.bid) AS bid,
-  STRING(payload.bid.currency_code) AS bid_currency,
+  SAFE_CAST(JSON_VALUE(payload, '$.negative') AS BOOL) AS negative,
+  JSON_VALUE(payload, '$.target_level') AS target_level,
+  JSON_VALUE(payload, '$.target_type')  AS target_type,
+  JSON_VALUE(payload, '$.target_details.keyword_target.keyword')     AS keyword,
+  JSON_VALUE(payload, '$.target_details.keyword_target.match_type')  AS keyword_match_type,
+  JSON_VALUE(payload, '$.target_details.product_target.product.product_id') AS product_id,
+  JSON_VALUE(payload, '$.target_details.product_target.product_id_type')    AS product_id_type,
+  JSON_VALUE(payload, '$.target_details.product_target.match_type')         AS product_match_type,
+  JSON_VALUE(payload, '$.target_details.theme_target.match_type')           AS theme_match_type,
+  JSON_VALUE(payload, '$.target_details.product_category_target.product_category_refinement.product_category_refinement.product_category_id') AS product_category_id,
+  SAFE_CAST(JSON_VALUE(payload, '$.bid.bid') AS FLOAT64) AS bid,
+  JSON_VALUE(payload, '$.bid.currency_code') AS bid_currency,
   last_updated, observed_at, source
 FROM `punlabs.AMZSales.v_ads_entity_current`
 WHERE entity_type = 'target';
@@ -87,8 +87,8 @@ WHERE entity_type = 'target';
 CREATE OR REPLACE VIEW `punlabs.AMZSales.v_ads_adgroups_current` AS
 SELECT
   entity_id AS ad_group_id, campaign_id,
-  STRING(payload.name) AS name, state,
-  FLOAT64(payload.bid.default_bid) AS default_bid,
+  JSON_VALUE(payload, '$.name') AS name, state,
+  SAFE_CAST(JSON_VALUE(payload, '$.bid.default_bid') AS FLOAT64) AS default_bid,
   last_updated, observed_at, source
 FROM `punlabs.AMZSales.v_ads_entity_current`
 WHERE entity_type = 'ad_group';
@@ -97,9 +97,9 @@ WHERE entity_type = 'ad_group';
 CREATE OR REPLACE VIEW `punlabs.AMZSales.v_ads_ads_current` AS
 SELECT
   entity_id AS ad_id, ad_group_id, campaign_id, state,
-  STRING(payload.creative.product_creative.product_creative_settings.advertised_product.product_id)      AS product_id,
-  STRING(payload.creative.product_creative.product_creative_settings.advertised_product.product_id_type) AS product_id_type,
-  STRING(payload.creative.product_creative.product_creative_settings.advertised_product.resolved_product_id) AS resolved_product_id,
+  JSON_VALUE(payload, '$.creative.product_creative.product_creative_settings.advertised_product.product_id')      AS product_id,
+  JSON_VALUE(payload, '$.creative.product_creative.product_creative_settings.advertised_product.product_id_type') AS product_id_type,
+  JSON_VALUE(payload, '$.creative.product_creative.product_creative_settings.advertised_product.resolved_product_id') AS resolved_product_id,
   last_updated, observed_at, source
 FROM `punlabs.AMZSales.v_ads_entity_current`
 WHERE entity_type = 'ad';
@@ -118,13 +118,14 @@ WITH ordered AS (
   WINDOW w AS (PARTITION BY entity_type, entity_id ORDER BY observed_at)
 )
 SELECT
+  COALESCE(last_updated, observed_at) AS changed_at,   -- Amazon's edit time; falls back to receipt time
   observed_at, entity_type, entity_id, campaign_id, ad_group_id, source, last_updated,
   prev_state, state,
-  FLOAT64(prev_payload.bid.bid) AS prev_bid, FLOAT64(payload.bid.bid) AS bid,
-  FLOAT64(prev_payload.budgets[0].budget_value.monetary_budget_value.monetary_budget.value) AS prev_daily_budget,
-  FLOAT64(payload.budgets[0].budget_value.monetary_budget_value.monetary_budget.value)      AS daily_budget,
-  STRING(prev_payload.name) AS prev_name, STRING(payload.name) AS name,
-  STRING(payload.target_details.keyword_target.keyword) AS keyword,
+  SAFE_CAST(JSON_VALUE(prev_payload, '$.bid.bid') AS FLOAT64) AS prev_bid, SAFE_CAST(JSON_VALUE(payload, '$.bid.bid') AS FLOAT64) AS bid,
+  SAFE_CAST(JSON_VALUE(prev_payload, '$.budgets[0].budget_value.monetary_budget_value.monetary_budget.value') AS FLOAT64) AS prev_daily_budget,
+  SAFE_CAST(JSON_VALUE(payload, '$.budgets[0].budget_value.monetary_budget_value.monetary_budget.value') AS FLOAT64)      AS daily_budget,
+  JSON_VALUE(prev_payload, '$.name') AS prev_name, JSON_VALUE(payload, '$.name') AS name,
+  JSON_VALUE(payload, '$.target_details.keyword_target.keyword') AS keyword,
   prev_payload, payload,
   prev_observed_at
 FROM ordered

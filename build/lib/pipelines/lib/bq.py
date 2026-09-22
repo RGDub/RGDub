@@ -72,8 +72,11 @@ def load_frame(bq, df: pd.DataFrame, table: str, schema=None, write_disposition:
 
     schema = schema or table_schema(bq, table)
     df = coerce_frame(df, schema)
+    # Columns the report does not carry stay NULL; the load job schema must
+    # list only the columns present in the frame.
+    present = [f for f in schema if f.name in df.columns]
     job = bq.load_table_from_dataframe(
-        df, table, job_config=bigquery.LoadJobConfig(schema=schema, write_disposition=write_disposition)
+        df, table, job_config=bigquery.LoadJobConfig(schema=present, write_disposition=write_disposition)
     )
     job.result()
     n = job.output_rows or 0

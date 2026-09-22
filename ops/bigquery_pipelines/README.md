@@ -8,13 +8,15 @@ The two scheduled pipelines live in Dataform repositories with no git remote:
 | `2ceefade-8ee6-4519-9540-de19149d2f3a` | AMZSales-DailyInventory | 15:00 daily |
 
 Each release config is pinned to a compilation result and scheduled runs use
-that pin. Committing to main does not move it, and neither does creating a
-compilation result by hand. Only a release does, and re-saving the release
-config triggers one. So every deploy is: run the deploy script (commit), then
-`release.py` (move the pin, optionally start a run).
+that pin. Committing to main does not move it, compiling by hand does not,
+and the config only accepts `gitCommitish: main`. The supported way is a
+release cron: the config compiles from main on its schedule and moves the pin.
+`release.py` sets that cron to 06:30 America/New_York on both repositories,
+ahead of the 07:00 and 15:00 runs. After that, a deploy is just a commit.
 
-- `release.py` — re-release both pipelines at head of main; `--run` /
-  `--run-inventory` also start a workflow invocation immediately.
+- `release.py` — set the release cron; `--run` / `--run-inventory` also compile
+  from main right now and start a workflow invocation on that compilation,
+  which does not wait for the pin.
 
 - `deploy_shim.py` — step 1 (2026-09-21): prepend `secret_shim_cell.py` to every
   notebook so scheduled runs survive the runtime image dropping

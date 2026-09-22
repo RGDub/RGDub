@@ -40,9 +40,26 @@ def test_traffic_transform_flattens_nested_sales_and_traffic():
     assert traffic.transform({"salesAndTrafficByAsin": []}, dt.date(2026, 9, 20)).empty
 
 
-def test_traffic_days_are_the_7_days_before_today():
+def test_traffic_days_are_the_7_complete_pacific_days_before_today():
     d = traffic.days(dt.date(2026, 9, 21))
     assert d[0] == dt.date(2026, 9, 14) and d[-1] == dt.date(2026, 9, 20) and len(d) == 7
+
+
+def test_traffic_skips_only_the_most_recent_empty_day(monkeypatch):
+    calls = []
+
+    class FakeSp:
+        def run_report(self, *a, **k):
+            calls.append(a[1].date())
+            return json.dumps({"salesAndTrafficByAsin": []}) if a[1].date() == dt.date(2026, 9, 20) else json.dumps(
+                {"salesAndTrafficByAsin": [{"sku": "A", "salesByAsin": {"unitsOrdered": 1}, "trafficByAsin": {"sessions": 2}}]})
+
+    monkeypatch.setattr(traffic, "days", lambda today=None: [dt.date(2026, 9, 19), dt.date(2026, 9, 20)])
+    assert traffic.run(dry_run=True, client=FakeSp(), pause_s=0) == 1
+    monkeypatch.setattr(traffic, "days", lambda today=None: [dt.date(2026, 9, 20), dt.date(2026, 9, 21)])
+    import pytest
+    with pytest.raises(RuntimeError):
+        traffic.run(dry_run=True, client=FakeSp(), pause_s=0)
 
 
 def test_settlements_transform_labels_summary_row_and_fills_ids():

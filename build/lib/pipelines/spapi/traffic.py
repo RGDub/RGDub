@@ -16,6 +16,7 @@ import datetime as dt
 import json
 import logging
 import time
+import zoneinfo
 
 import pandas as pd
 
@@ -30,10 +31,12 @@ TABLE = "punlabs.AMZSales.DailyTraffic"
 REPORT_TYPE = "GET_SALES_AND_TRAFFIC_REPORT"
 LOOKBACK_DAYS = 7
 KEY_COLUMNS = ("date", "parentAsin", "childAsin", "sku", "Parent SKU")
+PACIFIC = zoneinfo.ZoneInfo("America/Los_Angeles")   # the marketplace's business day
 
 
 def days(today: dt.date | None = None) -> list[dt.date]:
-    today = today or dt.datetime.now(dt.timezone.utc).date()
+    """The 7 complete Pacific days before today (Pacific)."""
+    today = today or dt.datetime.now(PACIFIC).date()
     return [today - dt.timedelta(days=i) for i in range(LOOKBACK_DAYS, 0, -1)]
 
 
@@ -60,13 +63,16 @@ def transform(report_json: str | dict, day: dt.date) -> pd.DataFrame:
     return df
 
 
-def run(*, dry_run: bool = False, client: SpApiClient | None = None, pause_s: int = 45) -> int:
+def run(*, dry_run: bool = False, client: SpApiClient | None = None, pause_s: int = 45,
+        dates: list[dt.date] | None = None) -> int:
+    """Load the trailing 7 Pacific days, or exactly ``dates`` (backfill)."""
     with run_logged("sp_traffic_daily", enabled=not dry_run) as ctx:
         sp = client or spapi_client_from_secrets()
         bq = None if dry_run else bqlib.client()
         schema = None if dry_run else bqlib.table_schema(bq, TABLE)
         total = 0
-        for i, day in enumerate(days()):
+        window = dates or days()
+        for i, day in enumerate(window):
             start = dt.datetime.combine(day, dt.time.min, tzinfo=dt.timezone.utc)
             end = dt.datetime.combine(day, dt.time(23, 59, 59), tzinfo=dt.timezone.utc)
             text = sp.run_report(REPORT_TYPE, start, end,
@@ -74,6 +80,13 @@ def run(*, dry_run: bool = False, client: SpApiClient | None = None, pause_s: in
             df = transform(text, day)
             log.info("%s: %d SKU rows", day, len(df))
             if df.empty:
+                if day == window[-1]:
+                    # Amazon publishes a day's sales & traffic some hours after it
+                    # closes; the most recent day may legitimately not exist yet.
+                    # It is inside tomorrow's window, so skip it loudly rather
+                    # than fail the whole run.
+                    log.warning("%s: no ASIN rows yet (most recent day); will be picked up tomorrow", day)
+                    continue
                 raise RuntimeError(f"sales and traffic report for {day} had no ASIN rows; refusing to continue")
             if not dry_run:
                 total += bqlib.replace_window(bq, df, TABLE, where=f"date = DATE('{day}')", schema=schema)

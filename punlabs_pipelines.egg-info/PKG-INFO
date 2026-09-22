@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: punlabs-pipelines
-Version: 0.1.2
+Version: 0.1.3
 Summary: Amazon SP-API, Ads API and Marketing Stream extractors feeding punlabs.AMZSales in BigQuery
 Requires-Python: >=3.10
 Requires-Dist: google-cloud-bigquery>=3.20

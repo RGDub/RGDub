@@ -1,21 +1,17 @@
-"""Make the pipelines pick up commits to main, and optionally run one now.
+"""Release head of main to the pipelines, and optionally run one now.
 
-What we learned on 2026-09-21 about these BigQuery-managed Dataform repos:
+These are BigQuery-managed ("first-party") Dataform repositories. Rules learned
+on 2026-09-21, each from an API error:
 * scheduled runs use releaseConfig.releaseCompilationResult (the "pin");
-* committing to main does not move the pin, nor does compiling by hand, nor
-  does a PATCH that changes nothing;
-* the release config only accepts gitCommitish "main";
-* a release config WITH a cronSchedule compiles from main on that schedule and
-  moves the pin. That is the supported path, so this script sets one: 06:30
-  America/New_York, before the 07:00 Daily Activity and 15:00 Daily Inventory
-  runs. Every deploy is then just a commit to main.
+* committing to main does not move the pin; compiling by hand does not either;
+* gitCommitish must be exactly "main";
+* release cron schedules are not supported ("strictActAsChecks").
+What remains is the documented roll-back path: set releaseCompilationResult
+to a compilation result created from this release config. So a deploy is:
+commit to main, compile from the release config, point the pin at it.
 
-For an immediate test, --run / --run-inventory compile from the release config
-right now and start a workflow invocation against that explicit compilation,
-which does not need the pin.
-
-    python release.py                 # set gitCommitish=main + 06:30 ET release cron on both
-    python release.py --run           # ...and run Daily Activity now on a fresh compilation
+    python release.py                 # release head of main on both pipelines
+    python release.py --run           # ...and start Daily Activity now
     python release.py --run-inventory # ...and/or Daily Inventory
 """
 import subprocess, sys, time
@@ -26,7 +22,6 @@ REPOS = {
     "eb6fd087-cb1a-4bef-84df-1f622a1c1843": ("PL-AMZSales-PunDataPipe-DailyActivity", "PunDataPipe-DailyRun", "--run"),
     "2ceefade-8ee6-4519-9540-de19149d2f3a": ("AMZSales-DailyInventory", "DailyINVDownload", "--run-inventory"),
 }
-RELEASE_CRON, TZ = "30 6 * * *", "America/New_York"
 token = subprocess.check_output(["gcloud", "auth", "print-access-token"], text=True).strip()
 H = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
@@ -41,33 +36,37 @@ def call(method, url, **kw):
 for repo, (name, workflow, flag) in REPOS.items():
     print(f"\n=== {name}")
     head = call("GET", f"{B}/{repo}:fetchHistory?pageSize=1")["commits"][0]["commitSha"]
-    cfg = call("GET", f"{B}/{repo}/releaseConfigs/default")
+    rc = f"{B}/{repo}/releaseConfigs/default"
+    cfg = call("GET", rc)
+    if cfg.get("gitCommitish") != "main":
+        call("PATCH", f"{rc}?updateMask=gitCommitish", json={"gitCommitish": "main"})
+        print("  gitCommitish restored to main")
     before = cfg.get("releaseCompilationResult", "")
-    if cfg.get("gitCommitish") != "main" or cfg.get("cronSchedule") != RELEASE_CRON:
-        call("PATCH", f"{B}/{repo}/releaseConfigs/default?updateMask=gitCommitish,cronSchedule,timeZone",
-             json={"gitCommitish": "main", "cronSchedule": RELEASE_CRON, "timeZone": TZ})
-        cfg = call("GET", f"{B}/{repo}/releaseConfigs/default")
-    print(f"  release config: gitCommitish={cfg.get('gitCommitish')} cron='{cfg.get('cronSchedule')}' {cfg.get('timeZone')}"
-          f" | pin {cfg.get('releaseCompilationResult','').split('/')[-1][:12]} | head of main {head[:8]}")
-    for _ in range(6):            # a real config change sometimes releases immediately
-        time.sleep(5)
-        after = call("GET", f"{B}/{repo}/releaseConfigs/default").get("releaseCompilationResult", "")
-        if after != before:
-            print(f"  pin moved -> {after.split('/')[-1][:12]}")
-            break
+
+    comp = call("POST", f"{B}/{repo}/compilationResults",
+                json={"releaseConfig": f"projects/punlabs/locations/us-central1/repositories/{repo}/releaseConfigs/default"})
+    errs = comp.get("compilationErrors", [])
+    print(f"  compiled {comp['name'].split('/')[-1][:12]} from {comp.get('resolvedGitCommitSha','?')[:8]} (head {head[:8]}); errors: {len(errs)}")
+    for e in errs[:5]:
+        print("    ", e.get("path"), e.get("message", "")[:160])
+    if errs:
+        continue
+
+    call("PATCH", f"{rc}?updateMask=releaseCompilationResult", json={"releaseCompilationResult": comp["name"]})
+    time.sleep(3)
+    after = call("GET", rc).get("releaseCompilationResult", "")
+    if after == comp["name"]:
+        print(f"  release pin -> {after.split('/')[-1][:12]}  (was {before.split('/')[-1][:12]})")
     else:
-        print("  pin unchanged for now; the 06:30 ET release will move it to head of main")
+        print(f"  release pin did NOT move (still {after.split('/')[-1][:12]}); falling back to an explicit-compilation run")
 
     if flag in sys.argv:
-        comp = call("POST", f"{B}/{repo}/compilationResults",
-                    json={"releaseConfig": f"projects/punlabs/locations/us-central1/repositories/{repo}/releaseConfigs/default"})
-        errs = comp.get("compilationErrors", [])
-        print(f"  compiled {comp['name'].split('/')[-1][:12]} from {comp.get('resolvedGitCommitSha','?')[:8]}; errors: {len(errs)}")
-        for e in errs[:5]:
-            print("    ", e.get("path"), e.get("message", "")[:160])
-        if errs:
-            continue
-        wf = call("GET", f"{B}/{repo}/workflowConfigs/{workflow}")
-        inv = call("POST", f"{B}/{repo}/workflowInvocations",
-                   json={"compilationResult": comp["name"], "invocationConfig": wf.get("invocationConfig", {})})
-        print(f"  started {workflow} as {inv['name'].split('/')[-1][:12]} on that compilation ({inv.get('state')})")
+        if after == comp["name"]:
+            inv = call("POST", f"{B}/{repo}/workflowInvocations",
+                       json={"workflowConfig": f"projects/punlabs/locations/us-central1/repositories/{repo}/workflowConfigs/{workflow}"})
+        else:
+            wf = call("GET", f"{B}/{repo}/workflowConfigs/{workflow}")
+            inv = call("POST", f"{B}/{repo}/workflowInvocations",
+                       json={"compilationResult": comp["name"], "invocationConfig": wf.get("invocationConfig", {})})
+        print(f"  started {workflow} as {inv['name'].split('/')[-1][:12]} "
+              f"on {inv.get('resolvedCompilationResult', comp['name']).split('/')[-1][:12]} ({inv.get('state')})")

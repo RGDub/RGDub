@@ -8,16 +8,14 @@ The two scheduled pipelines live in Dataform repositories with no git remote:
 | `2ceefade-8ee6-4519-9540-de19149d2f3a` | AMZSales-DailyInventory | 15:00 daily |
 
 Each release config is pinned to a compilation result and scheduled runs use
-that pin. Committing to main does not move it, compiling by hand does not,
-and the config only accepts `gitCommitish: main`. The supported way is a
-release cron: the config compiles from main on its schedule and moves the pin.
-`release.py` sets that cron to 06:30 America/New_York on both repositories,
-ahead of the 07:00 and 15:00 runs. After that, a deploy is just a commit.
+that pin. In these BigQuery-managed repositories: committing to main does not
+move it, compiling by hand does not, `gitCommitish` must be `main`, and release
+cron schedules are refused. The path that remains is the documented roll-back
+call: compile from the release config, then PATCH `releaseCompilationResult`
+to that compilation. `release.py` does exactly that for both repositories.
 
-- `release.py` — set the release cron; `--run` / `--run-inventory` also compile
-  from main right now and start a workflow invocation on that compilation,
-  which does not wait for the pin.
-
+- `release.py` — release head of main on both pipelines; `--run` /
+  `--run-inventory` also start a workflow invocation immediately.
 - `deploy_shim.py` — step 1 (2026-09-21): prepend `secret_shim_cell.py` to every
   notebook so scheduled runs survive the runtime image dropping
   `google-cloud-secret-manager`. Idempotent.

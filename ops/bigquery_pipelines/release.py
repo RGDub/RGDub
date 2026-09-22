@@ -52,7 +52,11 @@ for repo, (name, workflow, flag) in REPOS.items():
     if errs:
         continue
 
-    call("PATCH", f"{rc}?updateMask=releaseCompilationResult", json={"releaseCompilationResult": comp["name"]})
+    # The API validates the whole resource on update, so gitCommitish must be restated.
+    r = requests.patch(f"{rc}?updateMask=releaseCompilationResult",
+                       headers=H, json={"gitCommitish": "main", "releaseCompilationResult": comp["name"]}, timeout=120)
+    if r.status_code >= 300:
+        print(f"  setting the pin was refused: HTTP {r.status_code} {r.text[:300]}")
     time.sleep(3)
     after = call("GET", rc).get("releaseCompilationResult", "")
     if after == comp["name"]:

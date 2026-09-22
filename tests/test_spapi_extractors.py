@@ -74,9 +74,11 @@ def test_finances_flatten_covers_every_event_family():
 
 
 def test_fba_ledger_transform_renames_and_flags_stock():
-    text = "Date\tMSKU\tTitle\tDisposition\tStarting_Warehouse_Balance\tEnding_Warehouse_Balance\n2026-09-20\tKPOP-CPNCLS-FBA\tt\tSELLABLE\t10\t8\n2026-09-20\tX-Y-Z\tt\tSELLABLE\t0\t0\n"
+    text = ("Date\tMSKU\tTitle\tDisposition\tStarting Warehouse Balance\tCustomer Shipments\tWarehouse Transfer In/Out\tOther Events\tEnding Warehouse Balance\n"
+            "2026-09-20\tKPOP-CPNCLS-FBA\tt\tSELLABLE\t10\t-2\t0\t0\t8\n2026-09-20\tX-Y-Z\tt\tSELLABLE\t0\t0\t0\t0\t0\n")
     df = fba_ledger.transform(text)
-    assert "Ending Warehouse Balance" in df.columns and "Ending_Warehouse_Balance" not in df.columns
+    assert {"Shipments", "WhseTransfers", "Adjustments", "Ending Warehouse Balance"} <= set(df.columns)
+    assert "Customer Shipments" not in df.columns
     assert list(df["Inventory Binary"]) == [1, 0]
     assert df["Parent SKU"].iloc[0] == "KPOP-CPNCLS"
     assert fba_ledger.target_day(dt.date(2026, 9, 21)) == dt.date(2026, 9, 20)

@@ -31,9 +31,18 @@ log = logging.getLogger(__name__)
 TABLE = "punlabs.AMZSales.PL-AMZSales-INVLedger"
 REPORT_TYPE = "GET_LEDGER_SUMMARY_VIEW_DATA"
 RENAME = {
+    # report header (as Amazon emits it today) -> table column
+    "Customer Shipments": "Shipments",
+    "Customer Returns": "CustomerReturns",
+    "Vendor Returns": "VendorReturns",
+    "Warehouse Transfer In/Out": "WhseTransfers",
+    "Other Events": "Adjustments",
+    # underscore variants the original notebook expected, kept in case Amazon flips back
     "Starting_Warehouse_Balance": "Starting Warehouse Balance",
     "In_Transit_Between_Warehouses": "In Transit Between Warehouses",
     "Customer_Shipments": "Shipments",
+    "Customer_Returns": "CustomerReturns",
+    "Vendor_Returns": "VendorReturns",
     "Warehouse_Transfer_In_Out": "WhseTransfers",
     "Other_Events": "Adjustments",
     "Ending_Warehouse_Balance": "Ending Warehouse Balance",

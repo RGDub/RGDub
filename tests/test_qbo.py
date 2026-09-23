@@ -41,6 +41,16 @@ def test_query_all_fails_on_short_read():
         client.query_all("Bill")
 
 
+def test_query_all_reads_renamed_response_key():
+    class Renamed(FakeQbo):
+        def query(self, sql):
+            resp = super().query(sql)
+            return {"CreditCardPaymentTxn": resp.pop("CreditCardPayment"), "startPosition": 1} \
+                if "CreditCardPayment" in resp else resp
+    client = Renamed({"CreditCardPayment": [{"Id": "1"}, {"Id": "2"}, {"Id": "3"}]})
+    assert len(client.query_all("CreditCardPayment")) == 3
+
+
 def test_list_entities_include_inactive():
     client = FakeQbo({})
     load.pull(client)

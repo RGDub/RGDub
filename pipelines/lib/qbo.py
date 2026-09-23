@@ -124,9 +124,11 @@ class QboClient:
         rows: list[dict] = []
         start = 1
         while len(rows) < expected:
-            page = self.query(
-                f"SELECT * FROM {entity} {where} STARTPOSITION {start} MAXRESULTS {PAGE_SIZE}".replace("  ", " ")
-            ).get(entity, [])
+            resp = self.query(
+                f"SELECT * FROM {entity} {where} STARTPOSITION {start} MAXRESULTS {PAGE_SIZE}".replace("  ", " "))
+            # The response key is usually the entity name, but not always
+            # (CreditCardPayment comes back as CreditCardPaymentTxn), so take the one list.
+            page = next((v for v in resp.values() if isinstance(v, list)), [])
             if not page:
                 break
             rows += page

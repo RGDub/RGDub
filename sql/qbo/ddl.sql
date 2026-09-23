@@ -153,7 +153,7 @@ CREATE OR REPLACE VIEW `punlabs.QBO.v_transactions` (
   doc_number          OPTIONS (description = 'Reference number: vendor invoice number on bills, check number, invoice number'),
   payee_type          OPTIONS (description = 'Vendor, Customer or Employee'),
   payee_id            OPTIONS (description = 'Id of the vendor/customer/employee; joins to v_vendors.vendor_id or v_customers.customer_id'),
-  payee_name          OPTIONS (description = 'Vendor, customer or employee name'),
+  payee_name          OPTIONS (description = 'Vendor, customer or employee name. For deposits, the source named on the first line (Amazon, Etsy, Faire, a lender)'),
   account_id          OPTIONS (description = 'Money-side account: bank/card paid from, deposit-to account, A/P for bills, from-account for transfers'),
   account_name        OPTIONS (description = 'Name of account_id'),
   account_type        OPTIONS (description = 'Type of account_id: Bank, Credit Card, Accounts Payable, ...'),
@@ -190,10 +190,13 @@ h AS (
     CASE
       WHEN JSON_VALUE(payload, '$.VendorRef.value') IS NOT NULL THEN 'Vendor'
       WHEN JSON_VALUE(payload, '$.CustomerRef.value') IS NOT NULL THEN 'Customer'
-      ELSE JSON_VALUE(payload, '$.EntityRef.type')
+      -- Deposits name the source (Amazon, Etsy, a lender) on the line, not the header.
+      ELSE INITCAP(COALESCE(JSON_VALUE(payload, '$.EntityRef.type'), JSON_VALUE(payload, '$.Line[0].DepositLineDetail.Entity.type')))
     END AS payee_type,
-    COALESCE(JSON_VALUE(payload, '$.VendorRef.value'), JSON_VALUE(payload, '$.CustomerRef.value'), JSON_VALUE(payload, '$.EntityRef.value')) AS payee_id,
-    COALESCE(JSON_VALUE(payload, '$.VendorRef.name'), JSON_VALUE(payload, '$.CustomerRef.name'), JSON_VALUE(payload, '$.EntityRef.name')) AS payee_name
+    COALESCE(JSON_VALUE(payload, '$.VendorRef.value'), JSON_VALUE(payload, '$.CustomerRef.value'), JSON_VALUE(payload, '$.EntityRef.value'),
+             JSON_VALUE(payload, '$.Line[0].DepositLineDetail.Entity.value')) AS payee_id,
+    COALESCE(JSON_VALUE(payload, '$.VendorRef.name'), JSON_VALUE(payload, '$.CustomerRef.name'), JSON_VALUE(payload, '$.EntityRef.name'),
+             JSON_VALUE(payload, '$.Line[0].DepositLineDetail.Entity.name')) AS payee_name
   FROM t
 )
 SELECT
@@ -301,9 +304,9 @@ SELECT
   COALESCE(JSON_VALUE(x.line, '$.SalesItemLineDetail.ItemRef.name'), JSON_VALUE(x.line, '$.ItemBasedExpenseLineDetail.ItemRef.name')),
   COALESCE(SAFE_CAST(JSON_VALUE(x.line, '$.SalesItemLineDetail.Qty') AS NUMERIC), SAFE_CAST(JSON_VALUE(x.line, '$.ItemBasedExpenseLineDetail.Qty') AS NUMERIC)),
   COALESCE(SAFE_CAST(JSON_VALUE(x.line, '$.SalesItemLineDetail.UnitPrice') AS NUMERIC), SAFE_CAST(JSON_VALUE(x.line, '$.ItemBasedExpenseLineDetail.UnitPrice') AS NUMERIC)),
-  COALESCE(JSON_VALUE(x.line, '$.JournalEntryLineDetail.Entity.Type'), JSON_VALUE(x.line, '$.DepositLineDetail.Entity.type'),
+  INITCAP(COALESCE(JSON_VALUE(x.line, '$.JournalEntryLineDetail.Entity.Type'), JSON_VALUE(x.line, '$.DepositLineDetail.Entity.type'),
            IF(COALESCE(JSON_VALUE(x.line, '$.AccountBasedExpenseLineDetail.CustomerRef.value'),
-                       JSON_VALUE(x.line, '$.ItemBasedExpenseLineDetail.CustomerRef.value')) IS NOT NULL, 'Customer', NULL)),
+                       JSON_VALUE(x.line, '$.ItemBasedExpenseLineDetail.CustomerRef.value')) IS NOT NULL, 'Customer', NULL))),
   COALESCE(JSON_VALUE(x.line, '$.JournalEntryLineDetail.Entity.EntityRef.name'), JSON_VALUE(x.line, '$.DepositLineDetail.Entity.name'),
            JSON_VALUE(x.line, '$.AccountBasedExpenseLineDetail.CustomerRef.name'), JSON_VALUE(x.line, '$.ItemBasedExpenseLineDetail.CustomerRef.name')),
   COALESCE(JSON_VALUE(x.line, '$.AccountBasedExpenseLineDetail.ClassRef.name'), JSON_VALUE(x.line, '$.ItemBasedExpenseLineDetail.ClassRef.name'),

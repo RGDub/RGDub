@@ -50,3 +50,30 @@ and the queue depth should stay near zero:
     aws sqs get-queue-attributes --region us-east-1 \
       --queue-url https://sqs.us-east-1.amazonaws.com/483692969999/amazon-marketing-stream \
       --attribute-names ApproximateNumberOfMessages
+
+# QuickBooks Online daily load (qbo-daily)
+
+A second Cloud Run job built from the same image, running
+`python -m pipelines.qbo.load` daily at 06:00 America/New_York. It pulls every
+QuickBooks transaction and list record into `punlabs.QBO.qbo_raw`; the views
+in `sql/qbo/ddl.sql` flatten it (`v_transactions`, `v_transaction_lines`, ...).
+
+One-time prerequisite, by a project owner. QuickBooks rotates the refresh token
+about daily and the job must save the new one, so the service account needs to
+add versions to that one secret:
+
+    gcloud secrets add-iam-policy-binding qbo-client-refreshtoken-production --project punlabs \
+      --member serviceAccount:amzsales@punlabs.iam.gserviceaccount.com \
+      --role roles/secretmanager.secretVersionAdder
+
+Then `bash ops/cloud_run/setup_qbo.sh` (deploy, schedule, run once).
+
+If a run fails with `invalid_grant`, the refresh token has expired or been
+revoked: get a new one from the Intuit OAuth 2.0 Playground (app PunData,
+Production) and save it with
+`pbpaste | tr -d '[:space:]' | gcloud secrets versions add qbo-client-refreshtoken-production --project punlabs --data-file=-`.
+
+Verify:
+
+    SELECT status, started_at, rows_written, error FROM `punlabs.AMZSales.pipeline_run_log`
+    WHERE pipeline = 'qbo_daily' ORDER BY started_at DESC LIMIT 5;

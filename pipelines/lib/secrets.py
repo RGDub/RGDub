@@ -112,3 +112,23 @@ def preflight(secret_ids: Iterable[str], project_id: str = DEFAULT_PROJECT) -> N
             "Preflight failed - the pipeline cannot authenticate:\n  - "
             + "\n  - ".join(missing)
         )
+
+
+def add_secret_version(secret_id: str, value: str, project_id: str = DEFAULT_PROJECT) -> None:
+    """Store ``value`` as the new latest version of ``secret_id``.
+
+    Used for credentials the provider rotates on use (the QuickBooks refresh
+    token). The caller needs roles/secretmanager.secretVersionAdder on the
+    secret. Clears the read cache so the next ``get_secret`` sees the new value.
+    """
+    session = _authorized_session()
+    url = f"{_API_ROOT}/projects/{project_id}/secrets/{secret_id}:addVersion"
+    body = {"payload": {"data": base64.b64encode(value.encode("utf-8")).decode("ascii")}}
+    response = session.post(url, json=body, timeout=30)
+    if response.status_code != 200:
+        raise SecretAccessError(
+            f"Could not add a version to secret '{secret_id}': HTTP {response.status_code} "
+            f"{response.text[:300]}. The runtime service account needs "
+            "roles/secretmanager.secretVersionAdder on this secret."
+        )
+    get_secret.cache_clear()

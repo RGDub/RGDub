@@ -115,10 +115,10 @@ def window(today: dt.date | None = None, days: int = LOOKBACK_DAYS) -> tuple[dt.
     return end - dt.timedelta(days=days - 1), end
 
 
-def fetch(sp: SpApiClient, start: dt.date, end: dt.date) -> pd.DataFrame:
+def fetch(sp: SpApiClient, start: dt.date, end: dt.date, timeout_s: int = 1200) -> pd.DataFrame:
     a = dt.datetime.combine(start, dt.time.min, tzinfo=dt.timezone.utc)
     b = dt.datetime.combine(end, dt.time(23, 59, 59), tzinfo=dt.timezone.utc)
-    return transform(sp.run_report(REPORT_TYPE, a, b, timeout_s=1200, report_options=REPORT_OPTIONS))
+    return transform(sp.run_report(REPORT_TYPE, a, b, timeout_s=timeout_s, report_options=REPORT_OPTIONS))
 
 
 def load(bq, df: pd.DataFrame, schema=None) -> int:
@@ -174,7 +174,7 @@ def backfill(start: dt.date, end: dt.date, *, client: SpApiClient | None = None,
         loaded, empty, failed = [], [], []
         for a, b in month_chunks(start, end, months_per_report):
             try:
-                df = fetch(sp, a, b)
+                df = fetch(sp, a, b, timeout_s=3600)  # multi-month reports take longer to build
                 if df.empty:
                     log.warning("%s..%s: no rows at Amazon", a, b)
                     empty.append((a, b))

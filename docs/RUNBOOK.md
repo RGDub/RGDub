@@ -159,6 +159,32 @@ backfilled** and is no longer present.
 
 ---
 
+## 3a. FBA stock by fulfillment center
+
+`AMZSales.fba_inventory_by_fc` holds FBA units per day, SKU, disposition and
+fulfillment center (FC code such as DET3). Loaded by
+`pipelines/spapi/fba_inventory_by_fc.py`, which the Daily Inventory pipeline
+runs right after the country ledger (inside `pipelines.spapi.fba_ledger.run`,
+heartbeat `fba_inventory_by_fc`). No notebook change was needed.
+
+- **Lag.** Amazon publishes FC-level days about 10 days after the country-level
+  ledger. Each run requests the trailing 21 days and replaces only the dates
+  Amazon returned, so late days fill in on later runs and a short report never
+  deletes history. The freshness alert fires if the newest FC day is more than
+  16 days old.
+- **Views.** `v_fba_stock_by_fc_latest` (units and share of each SKU per FC on
+  the newest published day) and `v_fba_stock_by_fc_daily` (per-FC totals and
+  movements).
+- **Check.** `sql/validation/fba_fc_vs_country.sql` must return no rows: FC
+  totals equal the country ledger per day, SKU and disposition.
+- **Backfill.** Amazon keeps about 18 months:
+  `python -m pipelines.spapi.fba_inventory_by_fc --backfill --start YYYY-MM-DD --end YYYY-MM-DD`
+  (one report per quarter; ledger reports have a rolling daily cap of roughly 10 requests).
+- **Not yet:** FC code to city/state/region mapping, and AWD stock by
+  warehouse (the AWD API has no location; see the AWD notes in docs).
+
+---
+
 ## 4. Preventing the next silent failure
 
 Both outages share one root cause: *nothing asserts that data should have

@@ -12,6 +12,7 @@ WITH daily AS (
     STRUCT('PL-AMZSales-PendingFinances',             'SP-API pending finances',   3),
     STRUCT('PL-AMZSales-INVLedger',                   'SP-API inventory ledger',   3),
     STRUCT('AWDInventoryDaily',                       'AWD inventory',             3),
+    STRUCT('fba_inventory_by_fc',                     'FBA stock by FC (loaded)',  3),
     STRUCT('DailyTraffic',                            'SP-API traffic',            3),
     STRUCT('DailySales',                              'Daily sales rollup',        3),
     STRUCT('AMZFinances',                             'Finances rollup',           3),
@@ -36,16 +37,24 @@ stream_stale AS (
   GROUP BY dataset_id
   HAVING TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(received_at), HOUR) > 6
 ),
+-- FC-level ledger days publish ~10 days late; alert if the newest day falls further behind.
+fc_lag AS (
+  SELECT FORMAT('FBA stock by FC newest day is %t, %d days behind, tolerance 16', MAX(date),
+                DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(date), DAY)) AS alert
+  FROM `punlabs.AMZSales.fba_inventory_by_fc`
+  HAVING DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), MAX(date), DAY) > 16
+),
 heartbeat_stale AS (
   SELECT FORMAT('no SUCCESS heartbeat for %s in the last 36 hours', pipeline) AS alert
   FROM UNNEST(['sp_orders_daily', 'sp_traffic_daily', 'sp_settlements_daily', 'sp_pending_finances_daily',
-               'sp_ads_daily', 'amz_fba_inv_ledger', 'awd_inventory_daily']) AS pipeline
+               'sp_ads_daily', 'amz_fba_inv_ledger', 'fba_inventory_by_fc', 'awd_inventory_daily']) AS pipeline
   WHERE pipeline NOT IN (
     SELECT pipeline FROM `punlabs.AMZSales.pipeline_run_log`
     WHERE status = 'SUCCESS' AND started_at > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 36 HOUR))
 ),
 alerts AS (
-  SELECT alert FROM daily_stale UNION ALL SELECT alert FROM stream_stale UNION ALL SELECT alert FROM heartbeat_stale
+  SELECT alert FROM daily_stale UNION ALL SELECT alert FROM stream_stale UNION ALL SELECT alert FROM fc_lag
+  UNION ALL SELECT alert FROM heartbeat_stale
 )
 SELECT IF(COUNT(*) = 0, 'all pipelines fresh',
           ERROR(CONCAT(COUNT(*), ' stale pipeline(s): ', STRING_AGG(alert, ' | ')))) AS status

@@ -210,15 +210,21 @@ class SpApiClient:
 
     # ------------------------------------------------------------------- AWD
     def awd_inventory(self, page_size: int = 200) -> Iterator[dict]:
-        """Every AWD inventory item across pages (the notebook read only the first)."""
-        params: dict[str, Any] = {"maxResults": page_size}
+        """Every AWD inventory item across pages (the notebook read only the first).
+
+        ``details=SHOW`` is required for the inventoryDetails block (available,
+        reserved and replenishment quantities); without it Amazon returns only
+        the SKU, inbound and on-hand totals. The notebook never asked for it, so
+        AWDInventoryDaily carried zeros in those columns from 2026-03 to 09.
+        """
+        params: dict[str, Any] = {"maxResults": page_size, "details": "SHOW"}
         while True:
             data = self.request("GET", "/awd/2024-05-09/inventory", params=params).json()
             yield from data.get("inventory", [])
             token = data.get("nextToken")
             if not token:
                 return
-            params = {"maxResults": page_size, "nextToken": token}
+            params = {"maxResults": page_size, "details": "SHOW", "nextToken": token}
 
 
 def spapi_client_from_secrets(region: str = "NA", secret_ids: dict[str, str] | None = None) -> SpApiClient:

@@ -8,6 +8,12 @@ an in-stock flag, then deletes that Date and appends.
 Fix over the notebook: it appended without deleting, so every manual re-run
 since the August outage wrote the day twice.
 
+The scheduled run also refreshes stock by fulfillment center
+(``pipelines.spapi.fba_inventory_by_fc``) after the country ledger has loaded,
+under its own heartbeat. Riding on this step means no notebook change was
+needed. If the FC step fails, the country rows are already written and the
+error is re-raised so the pipeline run shows red.
+
     from pipelines.spapi.fba_ledger import run
     run()
 """
@@ -64,7 +70,24 @@ def transform(tsv: str) -> pd.DataFrame:
     return df
 
 
-def run(*, dry_run: bool = False, client: SpApiClient | None = None, day: dt.date | None = None) -> int:
+def run(*, dry_run: bool = False, client: SpApiClient | None = None, day: dt.date | None = None,
+        include_fc: bool | None = None) -> int:
+    """Load the country ledger for ``day`` (default yesterday).
+
+    ``include_fc`` defaults to True for the scheduled run and False when a
+    specific ``day`` is being re-run by hand.
+    """
+    if include_fc is None:
+        include_fc = day is None
+    rows, sp = _run_country(dry_run=dry_run, client=client, day=day)
+    if include_fc:
+        from pipelines.spapi import fba_inventory_by_fc
+
+        fba_inventory_by_fc.run(dry_run=dry_run, client=sp)
+    return rows
+
+
+def _run_country(*, dry_run: bool, client: SpApiClient | None, day: dt.date | None) -> tuple[int, SpApiClient]:
     with run_logged("amz_fba_inv_ledger", enabled=not dry_run) as ctx:
         sp = client or spapi_client_from_secrets()
         day = day or target_day()
@@ -75,10 +98,10 @@ def run(*, dry_run: bool = False, client: SpApiClient | None = None, day: dt.dat
                                                      "aggregatedByTimePeriod": "DAILY"}))
         log.info("ledger for %s: %d rows", day, len(df))
         if dry_run:
-            return len(df)
+            return len(df), sp
         bq = bqlib.client()
         ctx.rows_written = bqlib.replace_window(bq, df, TABLE, where=f"Date = DATE('{day}')")
-        return ctx.rows_written
+        return ctx.rows_written, sp
 
 
 if __name__ == "__main__":

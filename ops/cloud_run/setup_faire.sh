@@ -5,16 +5,17 @@
 # Same image as the other jobs (repo-root Dockerfile), entrypoint overridden to
 # pipelines.faire.load. Tables and views: sql/faire/ddl.sql.
 #
-# Prerequisite: the brand access token in Secret Manager as FAIRE-API-ACCESS-TOKEN
-# (generated in the Faire Brand Portal: Settings > Integrations > "Have an
-# unpublished integration?"), next to the existing FAIRE-API-APP-ID and
-# FAIRE-API-SECRET-ID, all readable by amzsales@.
+# Prerequisite: the brand access token in Secret Manager as FAIRE-API-ACCESS-TOKEN,
+# generated in the Faire Brand Portal (Settings > Integrations > "Have an
+# unpublished integration?" > enter the app token > Generate API key). It is a
+# classic brand token sent as X-FAIRE-ACCESS-TOKEN; the FAIRE-API-APP-ID /
+# FAIRE-API-SECRET-ID pair is not used.
 set -euo pipefail
 PROJECT=punlabs; REGION=us-central1; SA=amzsales@punlabs.iam.gserviceaccount.com
 JOB=faire-daily
 
 echo "== 0. secrets readable by the job"
-for s in FAIRE-API-APP-ID FAIRE-API-SECRET-ID FAIRE-API-ACCESS-TOKEN; do
+for s in FAIRE-API-ACCESS-TOKEN; do
   gcloud secrets describe $s --project $PROJECT >/dev/null
   gcloud secrets add-iam-policy-binding $s --project $PROJECT --member serviceAccount:$SA \
     --role roles/secretmanager.secretAccessor --quiet >/dev/null

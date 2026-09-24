@@ -87,11 +87,12 @@ run (two-day overlap) plus the product catalog into `punlabs.FaireSales`
 flatten them (`v_faire_orders`, `v_faire_order_items`, `v_faire_shipments`,
 `v_faire_products`).
 
-Auth is the Faire External API v2's two headers: app credentials
-(`FAIRE-API-APP-ID`, `FAIRE-API-SECRET-ID`, created 2026-06) and a brand access
-token, `FAIRE-API-ACCESS-TOKEN`. The token is generated once in the Brand
-Portal (Settings > Integrations > "Have an unpublished integration?" > enter the
-app's token) and stored with
+Auth is a single brand access token, `FAIRE-API-ACCESS-TOKEN`, sent as
+`X-FAIRE-ACCESS-TOKEN`. It is generated once in the Brand Portal (Settings >
+Integrations > "Have an unpublished integration?" > enter the app token from
+`FAIRE-API-APP-ID` > Generate API key, or go straight to
+`/brand-portal/integrations/<app token>`) and stored with. The app id/secret
+pair is only for OAuth-flow tokens and is not used.
 
     pbpaste | tr -d '[:space:]' | gcloud secrets create FAIRE-API-ACCESS-TOKEN --project punlabs --data-file=- --replication-policy=automatic
 

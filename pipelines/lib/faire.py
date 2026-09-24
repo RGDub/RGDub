@@ -1,9 +1,11 @@
 """Minimal Faire External API v2 client (brand side).
 
-Auth is two headers on every call: the app credentials (base64 of
-``applicationId:applicationSecret``) and a brand access token generated in the
-Faire Brand Portal (Settings > Integrations > "Have an unpublished
-integration?"). Both live in Secret Manager.
+Auth is a brand access token generated in the Faire Brand Portal (Settings >
+Integrations > "Have an unpublished integration?" > Generate API key), sent as
+``X-FAIRE-ACCESS-TOKEN``. It lives in Secret Manager as FAIRE-API-ACCESS-TOKEN.
+(The OAuth pair, app credentials + ``X-FAIRE-OAUTH-ACCESS-TOKEN``, is only for
+tokens issued through the OAuth redirect flow; portal keys are rejected with
+401 under it. Verified 2026-09-23.)
 
     from pipelines.lib.faire import faire_client_from_secrets
     faire = faire_client_from_secrets()
@@ -27,12 +29,8 @@ import requests
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://www.faire.com/external-api/v2"
-SECRET_IDS = {
-    "app_id": "FAIRE-API-APP-ID",
-    "app_secret": "FAIRE-API-SECRET-ID",
-    "access_token": "FAIRE-API-ACCESS-TOKEN",
-}
-PAGE_LIMIT = 50
+SECRET_IDS = {"access_token": "FAIRE-API-ACCESS-TOKEN"}
+PAGE_LIMITS = {"orders": 50, "products": 250}   # Faire's maxima; it rejects anything outside [10, max]
 
 
 class FaireApiError(RuntimeError):
@@ -44,17 +42,19 @@ class FaireApiError(RuntimeError):
 
 @dataclass
 class FaireClient:
-    app_id: str
-    app_secret: str
     access_token: str
+    app_id: str | None = None          # only for OAuth-flow tokens
+    app_secret: str | None = None
     session: requests.Session = field(default_factory=requests.Session)
     max_retries: int = 8
 
     @property
     def headers(self) -> dict[str, str]:
-        creds = base64.b64encode(f"{self.app_id}:{self.app_secret}".encode()).decode()
-        return {"X-FAIRE-APP-CREDENTIALS": creds, "X-FAIRE-OAUTH-ACCESS-TOKEN": self.access_token,
-                "Accept": "application/json"}
+        if self.app_id and self.app_secret:
+            creds = base64.b64encode(f"{self.app_id}:{self.app_secret}".encode()).decode()
+            return {"X-FAIRE-APP-CREDENTIALS": creds, "X-FAIRE-OAUTH-ACCESS-TOKEN": self.access_token,
+                    "Accept": "application/json"}
+        return {"X-FAIRE-ACCESS-TOKEN": self.access_token, "Accept": "application/json"}
 
     def request(self, method: str, path: str, *, params: dict | None = None, json_body: Any | None = None,
                 timeout: int = 60) -> requests.Response:
@@ -84,7 +84,7 @@ class FaireClient:
         raise AssertionError("unreachable")
 
     def _paginate(self, path: str, key: str, params: dict | None = None) -> Iterator[dict]:
-        params = {"limit": PAGE_LIMIT, **(params or {})}
+        params = {"limit": PAGE_LIMITS[key], **(params or {})}
         cursor = None
         while True:
             page_params = {**params, "cursor": cursor} if cursor else params
@@ -96,9 +96,6 @@ class FaireClient:
                 return
 
     # ------------------------------------------------------------ resources
-    def brand(self) -> dict:
-        return self.request("GET", "/brand").json()
-
     def orders(self, updated_at_min: str | None = None, created_at_min: str | None = None,
                excluded_states: str | None = None) -> Iterator[dict]:
         """All orders, ascending by updated_at. ISO 8601 timestamps for the filters."""
@@ -123,5 +120,4 @@ def faire_client_from_secrets(secret_ids: dict[str, str] | None = None) -> Faire
 
     ids = {**SECRET_IDS, **(secret_ids or {})}
     preflight(ids.values())
-    return FaireClient(get_secret(ids["app_id"]).strip(), get_secret(ids["app_secret"]).strip(),
-                       get_secret(ids["access_token"]).strip())
+    return FaireClient(get_secret(ids["access_token"]).strip())

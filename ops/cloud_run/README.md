@@ -1,3 +1,26 @@
+# Service accounts: one per API family
+
+| Service account | Runs | Outside GCP, add it as |
+|---|---|---|
+| `amzsales@punlabs.iam.gserviceaccount.com` | Amazon (SP-API, Ads, Marketing Stream), QBO, Faire, Etsy, Shopify jobs | n/a (those APIs use their own secrets) |
+| `google-apis@punlabs.iam.gserviceaccount.com` | Google-owned APIs: Analytics (GA4), later Search Console, Merchant Center | **Viewer on the GA4 property** (Admin > Property access management), owner/user on Search Console sites |
+
+`google-apis@` (created 2026-09-24) holds only `bigquery.jobUser` and
+`logging.logWriter` at project level, WRITER on the `GoogleAnalytics` dataset,
+and `bigquery.dataEditor` on `AMZSales.pipeline_run_log` for heartbeats. Google
+APIs authenticate the service account natively, so it needs no secrets. To test
+a Google API as it from a laptop (user OAuth cannot get the Analytics scope
+under the punlabs.io Workspace policy):
+
+    SA=google-apis@punlabs.iam.gserviceaccount.com
+    curl -s -X POST -H "Authorization: Bearer $(gcloud auth print-access-token)" -H "Content-Type: application/json" \
+      "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SA}:generateAccessToken" \
+      -d '{"scope":["https://www.googleapis.com/auth/analytics.readonly"],"lifetime":"600s"}'
+
+(`gcloud auth print-access-token --impersonate-service-account` ignores custom
+scopes, and `$SA:` without braces is mangled by zsh.) Needs
+`roles/iam.serviceAccountTokenCreator` on the service account, which Grant has.
+
 # Stream poller on Cloud Run
 
 The Marketing Stream poller is the one piece that cannot live in the daily

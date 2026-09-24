@@ -141,3 +141,40 @@ Verify:
 
     SELECT status, started_at, rows_written, error FROM `punlabs.AMZSales.pipeline_run_log`
     WHERE pipeline = 'etsy_daily' ORDER BY started_at DESC LIMIT 5;
+
+# Shopify daily load (shopify-daily)
+
+A fifth Cloud Run job from the same image, running `python -m pipelines.shopify.load`
+daily at 07:00 America/New_York. It pulls orders updated since the last run
+(two-day overlap; the first run pulls the whole history) as one bulk
+operation, a snapshot of every product with its variants and inventory by
+location as a second bulk operation, and Shopify Payments payouts, into
+`punlabs.ShopifySales` (`shopify_orders_raw`, `shopify_products_raw`,
+`shopify_payouts_raw`). Views in `sql/shopify/ddl.sql` flatten them
+(`v_shopify_orders`, `v_shopify_order_items`, `v_shopify_refunds`,
+`v_shopify_refund_items`, `v_shopify_transactions`, `v_shopify_products`,
+`v_shopify_inventory`, `v_shopify_payouts`) and `v_shopify_sales_by_day`
+rebuilds Shopify's Sales by day report (the legacy
+`PL-ShopifySales-SalesbyDay` columns).
+
+Auth is a custom-app Admin API access token (`shpat_...`) for
+popcolors.myshopify.com, sent as `X-Shopify-Access-Token`; it does not expire
+or rotate. Created once in the store admin: Settings > Apps and sales channels
+> Develop apps > Create an app > Configuration > Admin API scopes
+`read_orders`, `read_all_orders` (without it only 60 days of orders are
+visible), `read_products`, `read_inventory`, `read_locations`,
+`read_shopify_payments_payouts`, `read_shopify_payments_accounts` > Install app > Reveal token once:
+
+    pbpaste | tr -d '[:space:]' | gcloud secrets create shopify-admin-token --project punlabs --data-file=- --replication-policy=automatic
+
+Then `bash ops/cloud_run/setup_shopify.sh` (grants, DDL, deploy, schedule, run once).
+
+If a run fails with HTTP 401, the app was uninstalled or the token rotated:
+create a new token and `gcloud secrets versions add shopify-admin-token ...`.
+The API version is pinned in `pipelines/lib/shopify.py` (`API_VERSION`);
+Shopify supports each version for 12 months, so bump it yearly.
+
+Verify:
+
+    SELECT status, started_at, rows_written, error FROM `punlabs.AMZSales.pipeline_run_log`
+    WHERE pipeline = 'shopify_daily' ORDER BY started_at DESC LIMIT 5;

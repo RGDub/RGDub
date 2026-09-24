@@ -48,7 +48,7 @@ heartbeat_stale AS (
   SELECT FORMAT('no SUCCESS heartbeat for %s in the last 36 hours', pipeline) AS alert
   FROM UNNEST(['sp_orders_daily', 'sp_traffic_daily', 'sp_settlements_daily', 'sp_pending_finances_daily',
                'sp_ads_daily', 'amz_fba_inv_ledger', 'fba_inventory_by_fc', 'awd_inventory_daily',
-               'qbo_daily']) AS pipeline
+               'qbo_daily', 'faire_daily', 'etsy_daily', 'shopify_daily']) AS pipeline
   WHERE pipeline NOT IN (
     SELECT pipeline FROM `punlabs.AMZSales.pipeline_run_log`
     WHERE status = 'SUCCESS' AND started_at > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 36 HOUR))

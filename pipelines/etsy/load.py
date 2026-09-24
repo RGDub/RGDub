@@ -27,7 +27,7 @@ import logging
 import uuid
 
 from pipelines.lib import bq as bqlib
-from pipelines.lib.etsy import EtsyClient, etsy_client_from_secrets
+from pipelines.lib.etsy import EtsyApiError, EtsyClient, etsy_client_from_secrets
 from pipelines.lib.heartbeat import run_logged
 
 log = logging.getLogger(__name__)
@@ -238,14 +238,21 @@ def backfill_payments(*, client: EtsyClient | None = None, pause_s: float = 0.15
         log.info("receipts without payment detail: %d", len(todo))
         pulled_at, run_id = dt.datetime.now(dt.timezone.utc).isoformat(), str(uuid.uuid4())
         rows: list[dict] = []
+        skipped = 0
         for i, rid in enumerate(todo, 1):
-            rows.extend(payment_row(p, pulled_at, run_id) for p in etsy.payments_for_receipt(rid))
+            try:
+                rows.extend(payment_row(p, pulled_at, run_id) for p in etsy.payments_for_receipt(rid))
+            except EtsyApiError as exc:
+                if exc.status != 404:
+                    raise
+                skipped += 1          # very old or canceled receipts have no payment record
             time.sleep(pause_s)
             if len(rows) >= batch or i == len(todo):
                 if rows:
                     ctx.rows_written += bqlib.load_json_rows(bq, rows, PAYMENTS_RAW)
                     rows = []
-                log.info("%d/%d receipts done, %d payment rows written", i, len(todo), ctx.rows_written)
+                log.info("%d/%d receipts done, %d payment rows written, %d without a payment record",
+                         i, len(todo), ctx.rows_written, skipped)
         return ctx.rows_written
 
 

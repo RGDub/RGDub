@@ -55,6 +55,42 @@ PARTITION BY DATE(pulled_at)
 CLUSTER BY listing_id
 OPTIONS (description = "Etsy listing snapshot, one row per listing per daily pull. Use v_etsy_listings for the latest.");
 
+CREATE TABLE IF NOT EXISTS `punlabs.EtsySales.etsy_reviews_raw` (
+  transaction_id INT64     OPTIONS(description="The line item the review is attached to"),
+  listing_id     INT64,
+  buyer_user_id  INT64,
+  rating         INT64     OPTIONS(description="1 to 5 stars"),
+  created_at     TIMESTAMP,
+  updated_at     TIMESTAMP OPTIONS(description="Reviews can be edited; one row per version"),
+  pulled_at      TIMESTAMP NOT NULL,
+  run_id         STRING,
+  payload        JSON      NOT NULL OPTIONS(description="The review as returned: rating, review text, language, image_url_fullxfull")
+)
+PARTITION BY DATE(created_at)
+CLUSTER BY listing_id
+OPTIONS (description = "Etsy shop reviews, one row per review version. Use v_etsy_reviews for the latest.");
+
+CREATE TABLE IF NOT EXISTS `punlabs.EtsySales.etsy_payments_raw` (
+  payment_id     INT64     NOT NULL,
+  receipt_id     INT64,
+  status         STRING,
+  gross          FLOAT64   OPTIONS(description="Amount the buyer paid, dollars"),
+  fees           FLOAT64   OPTIONS(description="Etsy fees on this payment, dollars"),
+  net            FLOAT64   OPTIONS(description="What the shop keeps, dollars"),
+  adjusted_gross FLOAT64   OPTIONS(description="Gross after refunds and adjustments"),
+  adjusted_fees  FLOAT64,
+  adjusted_net   FLOAT64   OPTIONS(description="Net after refunds and adjustments; the final number for the order"),
+  currency       STRING,
+  created_at     TIMESTAMP,
+  updated_at     TIMESTAMP,
+  pulled_at      TIMESTAMP NOT NULL,
+  run_id         STRING,
+  payload        JSON      NOT NULL OPTIONS(description="The payment as returned, including posted_* amounts and payment_adjustments[] with their items")
+)
+PARTITION BY DATE(created_at)
+CLUSTER BY receipt_id
+OPTIONS (description = "Etsy payment per receipt (order): gross, fees, net, and adjustments. One row per version; use v_etsy_payments for the latest.");
+
 -- Current state of every receipt, totals flattened to dollars.
 CREATE OR REPLACE VIEW `punlabs.EtsySales.v_etsy_receipts`
 OPTIONS (description = "One row per Etsy receipt (latest version), money in dollars, dates in America/New_York.") AS
@@ -197,3 +233,34 @@ SELECT
   payment_method                                      AS `Payment Type`,
   sku                                                 AS `SKU`
 FROM tx;
+
+-- Latest version of every review, with its listing title and SKU when known.
+CREATE OR REPLACE VIEW `punlabs.EtsySales.v_etsy_reviews`
+OPTIONS (description = "One row per Etsy review (latest version): stars, text, listing, the line item it came from, and the SKU sold.") AS
+WITH latest AS (
+  SELECT * EXCEPT (rn) FROM (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY transaction_id ORDER BY updated_at DESC, pulled_at DESC) AS rn
+    FROM `punlabs.EtsySales.etsy_reviews_raw`)
+  WHERE rn = 1
+)
+SELECT
+  v.transaction_id, v.listing_id, v.rating,
+  JSON_VALUE(v.payload, '$.review')   AS review_text,
+  JSON_VALUE(v.payload, '$.language') AS language,
+  JSON_VALUE(v.payload, '$.image_url_fullxfull') IS NOT NULL AS has_photo,
+  DATE(v.created_at, 'America/New_York') AS review_date,
+  v.created_at, v.updated_at, v.buyer_user_id,
+  t.sku, t.title, t.receipt_id, t.order_date
+FROM latest v
+LEFT JOIN `punlabs.EtsySales.v_etsy_transactions` t USING (transaction_id);
+
+-- Latest payment per receipt: what the buyer paid, Etsy's cut, what the shop kept.
+CREATE OR REPLACE VIEW `punlabs.EtsySales.v_etsy_payments`
+OPTIONS (description = "One row per Etsy order's payment (latest version): gross, fees, net, and the adjusted figures after refunds. Dollars.") AS
+SELECT * EXCEPT (rn, pulled_at, run_id, payload),
+       SAFE_DIVIDE(adjusted_fees, NULLIF(adjusted_gross, 0)) AS fee_rate,
+       ARRAY_LENGTH(JSON_QUERY_ARRAY(payload, '$.payment_adjustments')) AS adjustment_count
+FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY payment_id ORDER BY updated_at DESC, pulled_at DESC) AS rn
+  FROM `punlabs.EtsySales.etsy_payments_raw`)
+WHERE rn = 1;

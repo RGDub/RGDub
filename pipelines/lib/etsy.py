@@ -193,6 +193,19 @@ class EtsyClient:
                                       {"min_created": start, "max_created": end})
             start = end + 1
 
+    def reviews(self, min_created: int | None = None, max_created: int | None = None) -> Iterator[dict]:
+        """Every review left on the shop (rating, text, listing, transaction, buyer)."""
+        params: dict[str, Any] = {}
+        if min_created is not None:
+            params["min_created"] = int(min_created)
+        if max_created is not None:
+            params["max_created"] = int(max_created)
+        yield from self._paginate(f"/shops/{self.shop_id}/reviews", params)
+
+    def payments_for_receipt(self, receipt_id: int) -> list[dict]:
+        """Etsy's per-order money: gross, fees, net (as charged, as posted, and after adjustments)."""
+        return self.request("GET", f"/shops/{self.shop_id}/receipts/{receipt_id}/payments").json().get("results", [])
+
     def listings(self, state: str = "active", includes: tuple[str, ...] = ("Inventory",)) -> Iterator[dict]:
         """Listings in one state (active, inactive, sold_out, draft, expired), with inventory (SKUs, prices)."""
         params = {"state": state, "includes": ",".join(includes)} if includes else {"state": state}

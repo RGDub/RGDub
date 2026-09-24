@@ -102,3 +102,42 @@ Verify:
 
     SELECT status, started_at, rows_written, error FROM `punlabs.AMZSales.pipeline_run_log`
     WHERE pipeline = 'faire_daily' ORDER BY started_at DESC LIMIT 5;
+
+# Etsy daily load (etsy-daily)
+
+A fourth Cloud Run job from the same image, running `python -m pipelines.etsy.load`
+daily at 06:45 America/New_York. It pulls receipts modified since the last run
+(two-day overlap; the first run pulls the whole history), the last 45 days of
+payment-ledger entries (replaced each run), and a snapshot of every listing
+with its inventory, into `punlabs.EtsySales` (`etsy_receipts_raw`,
+`etsy_ledger_raw`, `etsy_listings_raw`). Views in `sql/etsy/ddl.sql` flatten
+them (`v_etsy_receipts`, `v_etsy_transactions`, `v_etsy_ledger`,
+`v_etsy_listings`) and `v_etsy_sold_items_legacy` reproduces the old CSV
+export's columns.
+
+Auth is Etsy Open API v3: an app API key (`etsy-api-keystring` +
+`etsy-api-shared-secret`, sent as `x-api-key: keystring:secret`) plus an OAuth
+2.0 token for the shop. The refresh token lasts 90 days and rotates on every
+refresh, so the job saves the new one to `etsy-oauth-refresh-token` (it needs
+`secretVersionAdder` on that secret; the setup script grants it).
+
+One-time, by the shop owner:
+
+1. Create an app at etsy.com/developers/your-apps with callback URL exactly
+   `http://localhost:3003/oauth/redirect`. Copy the keystring and shared secret:
+
+       pbpaste | tr -d '[:space:]' | gcloud secrets create etsy-api-keystring     --project punlabs --data-file=- --replication-policy=automatic
+       pbpaste | tr -d '[:space:]' | gcloud secrets create etsy-api-shared-secret --project punlabs --data-file=- --replication-policy=automatic
+
+2. Authorize the shop (opens a browser, stores the refresh token and shop id):
+
+       .venv/bin/python ops/etsy_authorize.py
+
+3. `bash ops/cloud_run/setup_etsy.sh` (grants, DDL, deploy, schedule, run once).
+
+If a run fails with `invalid_grant`, re-run step 2.
+
+Verify:
+
+    SELECT status, started_at, rows_written, error FROM `punlabs.AMZSales.pipeline_run_log`
+    WHERE pipeline = 'etsy_daily' ORDER BY started_at DESC LIMIT 5;

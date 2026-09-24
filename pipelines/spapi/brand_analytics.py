@@ -36,7 +36,7 @@ SQP_TABLE = "punlabs.AMZSales.ba_search_query_perf"
 SCP_REPORT = "GET_BRAND_ANALYTICS_SEARCH_CATALOG_PERFORMANCE_REPORT"
 SQP_REPORT = "GET_BRAND_ANALYTICS_SEARCH_QUERY_PERFORMANCE_REPORT"
 LOOKBACK_WEEKS = 3
-SQP_BATCH = 20          # ASINs per SQP request; the asin option has a length limit
+SQP_BATCH = 15          # ASINs per SQP request: the asin option is capped at 200 characters (15 x 10 + 14 commas = 164)
 PUBLISH_LAG_DAYS = 3    # a week is requested only once it ended at least this long ago
 
 

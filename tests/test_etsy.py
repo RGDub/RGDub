@@ -93,3 +93,16 @@ def test_run_dry_counts_new_versions_only(monkeypatch):
     monkeypatch.setattr(load, "watermark", lambda bq: 1758000000)
     monkeypatch.setattr(load, "known_versions", lambda bq, since: {(1, load._ts(1758672000))})
     assert load.run(dry_run=True, client=FakeEtsy()) == 1 + 1 + 1   # one new receipt version, one ledger entry, one listing
+
+
+def test_ledger_splits_into_31_day_windows():
+    windows = []
+
+    class S:
+        def request(self, method, url, headers=None, params=None, json=None, timeout=None):
+            windows.append((params["min_created"], params["max_created"]))
+            return _resp(200, {"results": []})
+
+    c = EtsyClient("k", "s", shop_id=1); c.session = S(); c._access_token = "t"; c._token_expires_at = 9e12
+    list(c.ledger_entries(0, 45 * 86400))
+    assert len(windows) == 2 and all(b - a <= 31 * 86400 for a, b in windows) and windows[-1][1] == 45 * 86400

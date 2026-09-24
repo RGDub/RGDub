@@ -179,10 +179,19 @@ class EtsyClient:
             params["max_created"] = int(max_created)
         yield from self._paginate(f"/shops/{self.shop_id}/receipts", params)
 
+    LEDGER_MAX_WINDOW = 31 * 86400 - 60     # Etsy refuses windows over 31 days
+
     def ledger_entries(self, min_created: int, max_created: int) -> Iterator[dict]:
-        """Payment account ledger: sales, fees, refunds, deposits (payouts)."""
-        yield from self._paginate(f"/shops/{self.shop_id}/payment-account/ledger-entries",
-                                  {"min_created": int(min_created), "max_created": int(max_created)})
+        """Payment account ledger: sales, fees, refunds, deposits (payouts).
+
+        Any span is accepted; it is split into the 31-day windows Etsy allows.
+        """
+        start = int(min_created)
+        while start < int(max_created):
+            end = min(start + self.LEDGER_MAX_WINDOW, int(max_created))
+            yield from self._paginate(f"/shops/{self.shop_id}/payment-account/ledger-entries",
+                                      {"min_created": start, "max_created": end})
+            start = end + 1
 
     def listings(self, state: str = "active", includes: tuple[str, ...] = ("Inventory",)) -> Iterator[dict]:
         """Listings in one state (active, inactive, sold_out, draft, expired), with inventory (SKUs, prices)."""

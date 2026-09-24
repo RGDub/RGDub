@@ -18,7 +18,13 @@ WITH daily AS (
     STRUCT('AMZFinances',                             'Finances rollup',           3),
     STRUCT('sp_performance_master',                   'SP ads performance',        3),
     STRUCT('PL-AMZSales-AdsInvoices',                 'Ads invoices (monthly)',   35),
-    STRUCT('ads_entity_log',                          'Ads campaign structure',   35)
+    STRUCT('ads_entity_log',                          'Ads campaign structure',   35),
+    STRUCT('ads_sp_search_term_daily',                'Ads search terms',          3),
+    STRUCT('ads_sp_placement_daily',                  'Ads placements',            3),
+    STRUCT('catalog_snapshot',                        'Catalog snapshot',          2),
+    STRUCT('pricing_daily',                           'Pricing snapshot',          2),
+    STRUCT('ba_search_catalog_perf',                  'Brand Analytics SCP',      10),
+    STRUCT('ba_search_query_perf',                    'Brand Analytics SQP',      10)
   ])
 ),
 daily_stale AS (

@@ -102,3 +102,27 @@ def test_throttled_query_waits_then_retries(monkeypatch):
     client = mod.ShopifyClient("popcolors", "tok", session=Session())
     assert client.shop_info() == {"name": "Pop"}
     assert len(calls) == 2 and slept and slept[0] >= 1.0
+
+
+def test_client_credentials_grant(monkeypatch):
+    from pipelines.lib import shopify as mod
+
+    class Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"access_token": "shpat_x", "expires_in": 86399}
+
+    posted = {}
+
+    class Session:
+        def post(self, url, **kw):
+            posted["url"] = url
+            posted["data"] = kw["data"]
+            return Resp()
+
+    tok = mod.access_token_from_client_credentials("popcolors", "cid", "csec", Session())
+    assert tok == "shpat_x"
+    assert posted["url"] == "https://popcolors.myshopify.com/admin/oauth/access_token"
+    assert posted["data"]["grant_type"] == "client_credentials"

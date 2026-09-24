@@ -157,20 +157,26 @@ location as a second bulk operation, and Shopify Payments payouts, into
 rebuilds Shopify's Sales by day report (the legacy
 `PL-ShopifySales-SalesbyDay` columns).
 
-Auth is a custom-app Admin API access token (`shpat_...`) for
-popcolors.myshopify.com, sent as `X-Shopify-Access-Token`; it does not expire
-or rotate. Created once in the store admin: Settings > Apps and sales channels
-> Develop apps > Create an app > Configuration > Admin API scopes
-`read_orders`, `read_all_orders` (without it only 60 days of orders are
-visible), `read_products`, `read_inventory`, `read_locations`,
-`read_shopify_payments_payouts`, `read_shopify_payments_accounts` > Install app > Reveal token once:
+Auth is the client credentials grant. Shopify stopped allowing new
+admin-created custom apps on 2026-01-01, so the app (`punlabs-data`) lives in
+the Dev Dashboard (dev.shopify.com > Apps) and has no static token: the job
+exchanges the app's client id and secret for a 24-hour Admin API access token
+at the start of every run. Setup, once: Dev Dashboard > Create app > Versions
+> Create version with Admin API scopes `read_orders`, `read_all_orders`
+(without it only 60 days of orders are visible), `read_products`,
+`read_inventory`, `read_locations`, `read_shopify_payments_payouts`,
+`read_shopify_payments_accounts` > Release > Install app on Pop Colors. Then
+App settings > Credentials, copy the client id and the secret:
 
-    pbpaste | tr -d '[:space:]' | gcloud secrets create shopify-admin-token --project punlabs --data-file=- --replication-policy=automatic
+    pbpaste | tr -d '[:space:]' | gcloud secrets create shopify-client-id     --project punlabs --data-file=- --replication-policy=automatic
+    pbpaste | tr -d '[:space:]' | gcloud secrets create shopify-client-secret --project punlabs --data-file=- --replication-policy=automatic
 
 Then `bash ops/cloud_run/setup_shopify.sh` (grants, DDL, deploy, schedule, run once).
 
-If a run fails with HTTP 401, the app was uninstalled or the token rotated:
-create a new token and `gcloud secrets versions add shopify-admin-token ...`.
+If a run fails with "client credentials grant failed", the secret was rotated
+in the Dev Dashboard or the app was uninstalled: `gcloud secrets versions add
+shopify-client-secret ...` with the new secret, or reinstall the app. Scope
+changes need a new app version (Versions > Create version) and a reinstall.
 The API version is pinned in `pipelines/lib/shopify.py` (`API_VERSION`);
 Shopify supports each version for 12 months, so bump it yearly.
 

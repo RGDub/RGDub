@@ -1,8 +1,10 @@
 """Shopify Admin GraphQL API client.
 
-Auth is a custom-app Admin API access token (``shpat_...``) created in the
-store admin (Settings > Apps and sales channels > Develop apps), sent as
-``X-Shopify-Access-Token``. It lives in Secret Manager as ``shopify-admin-token``.
+Auth is the client credentials grant: the app (``punlabs-data``, created in
+the Shopify Dev Dashboard and installed on the store) exchanges its client id
+and secret for an Admin API access token that lasts 24 hours. There is no
+static token to copy; the client mints one on construction. The credentials
+live in Secret Manager as ``shopify-client-id`` and ``shopify-client-secret``.
 The store is identified by its myshopify subdomain (``popcolors``).
 
     from pipelines.lib.shopify import shopify_client_from_secrets
@@ -42,7 +44,7 @@ import requests
 log = logging.getLogger(__name__)
 
 API_VERSION = "2026-04"
-SECRET_IDS = {"access_token": "shopify-admin-token"}
+SECRET_IDS = {"client_id": "shopify-client-id", "client_secret": "shopify-client-secret"}
 DEFAULT_SHOP = os.environ.get("SHOPIFY_SHOP", "popcolors")
 BULK_POLL_S = 5
 BULK_TIMEOUT_S = 1800
@@ -436,9 +438,29 @@ class ShopifyClient:
         yield from self.paginate(PAYOUTS_QUERY, "shopifyPaymentsAccount.payouts")
 
 
+def access_token_from_client_credentials(shop: str, client_id: str, client_secret: str,
+                                         session: requests.Session | None = None) -> str:
+    """Exchange the app's client id and secret for a 24-hour Admin API access token."""
+    resp = (session or requests).post(
+        f"https://{shop}.myshopify.com/admin/oauth/access_token",
+        data={"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret},
+        timeout=60)
+    if resp.status_code != 200:
+        raise ShopifyApiError(f"client credentials grant failed: HTTP {resp.status_code} {resp.text[:300]}")
+    body = resp.json()
+    token = body.get("access_token")
+    if not token:
+        raise ShopifyApiError(f"client credentials grant returned no access_token: {str(body)[:300]}")
+    log.info("Shopify access token minted for %s (expires in %ss)", shop, body.get("expires_in"))
+    return token
+
+
 def shopify_client_from_secrets(shop: str = DEFAULT_SHOP, secret_ids: dict[str, str] | None = None) -> ShopifyClient:
     from pipelines.lib.secrets import get_secret, preflight
 
     ids = {**SECRET_IDS, **(secret_ids or {})}
     preflight(ids.values())
-    return ShopifyClient(shop, get_secret(ids["access_token"]).strip())
+    session = requests.Session()
+    token = access_token_from_client_credentials(shop, get_secret(ids["client_id"]).strip(),
+                                                 get_secret(ids["client_secret"]).strip(), session)
+    return ShopifyClient(shop, token, session=session)

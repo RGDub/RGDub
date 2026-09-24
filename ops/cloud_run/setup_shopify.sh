@@ -5,19 +5,21 @@
 # Same image as the other jobs (repo-root Dockerfile), entrypoint overridden to
 # pipelines.shopify.load. Tables and views: sql/shopify/ddl.sql.
 #
-# Prerequisite: a custom-app Admin API access token in Secret Manager as
-# shopify-admin-token (store admin > Settings > Apps and sales channels >
-# Develop apps > create app > Admin API scopes read_orders, read_all_orders,
-# read_products, read_inventory, read_locations, read_shopify_payments_payouts,
-# read_shopify_payments_accounts
-# > Install > Reveal token once):
-#   pbpaste | tr -d '[:space:]' | gcloud secrets create shopify-admin-token --project punlabs --data-file=- --replication-policy=automatic
+# Prerequisite: the app's client credentials in Secret Manager as
+# shopify-client-id and shopify-client-secret. The app (punlabs-data) lives in
+# the Shopify Dev Dashboard (dev.shopify.com > Apps), with Admin API scopes
+# read_orders, read_all_orders, read_products, read_inventory, read_locations,
+# read_shopify_payments_payouts, read_shopify_payments_accounts on its active
+# version, installed on Pop Colors. Settings > Credentials > copy each:
+#   pbpaste | tr -d '[:space:]' | gcloud secrets create shopify-client-id     --project punlabs --data-file=- --replication-policy=automatic
+#   pbpaste | tr -d '[:space:]' | gcloud secrets create shopify-client-secret --project punlabs --data-file=- --replication-policy=automatic
+# The job exchanges them for a 24-hour access token on every run.
 set -euo pipefail
 PROJECT=punlabs; REGION=us-central1; SA=amzsales@punlabs.iam.gserviceaccount.com
 JOB=shopify-daily
 
 echo "== 0. secrets readable by the job"
-for s in shopify-admin-token; do
+for s in shopify-client-id shopify-client-secret; do
   gcloud secrets describe $s --project $PROJECT >/dev/null
   gcloud secrets add-iam-policy-binding $s --project $PROJECT --member serviceAccount:$SA \
     --role roles/secretmanager.secretAccessor --quiet >/dev/null

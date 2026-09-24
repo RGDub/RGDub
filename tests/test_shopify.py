@@ -40,7 +40,7 @@ def test_rebuild_products_inventory_levels():
          "__parentId": "gid://shopify/Product/1"},
         {"__typename": "InventoryLevel", "id": "gid://shopify/InventoryLevel/3?inventory_item_id=8",
          "location": {"id": "gid://shopify/Location/1", "name": "Warehouse"},
-         "quantities": [{"name": "available", "quantity": 4}], "__parentId": "gid://shopify/InventoryItem/8"},
+         "quantities": [{"name": "available", "quantity": 4}], "__parentId": "gid://shopify/ProductVariant/5"},
         {"__typename": "Product", "id": "gid://shopify/Product/2", "title": "Empty"},
     ]
     products = rebuild(iter(lines))

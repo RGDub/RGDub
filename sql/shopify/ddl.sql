@@ -55,7 +55,7 @@ OPTIONS (description = "Shopify Payments payouts, one row per payout per status 
 
 -- Current state of every order with the money fields flattened.
 CREATE OR REPLACE VIEW `punlabs.ShopifySales.v_shopify_orders`
-OPTIONS (description = "One row per Shopify order (latest version), test orders excluded. Money in shop currency. gross_sales = subtotal before discounts; discounts and refunds are positive amounts.") AS
+OPTIONS (description = "One row per Shopify order (latest version), test orders excluded. Money in shop currency. gross_sales = line items at original price; discounts = product discounts (positive); shipping = shipping charged after any free-shipping discount (shipping_discount). Matches Shopify's Sales report definitions.") AS
 WITH latest AS (
   SELECT * EXCEPT (rn) FROM (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC, pulled_at DESC) AS rn
@@ -78,11 +78,20 @@ SELECT
   JSON_VALUE(payload, '$.shippingAddress.zip')                             AS ship_zip,
   ARRAY_LENGTH(JSON_QUERY_ARRAY(payload, '$.lineItems'))                   AS line_count,
   (SELECT SUM(SAFE_CAST(JSON_VALUE(i, '$.quantity') AS INT64)) FROM UNNEST(JSON_QUERY_ARRAY(payload, '$.lineItems')) i) AS units,
-  SAFE_CAST(JSON_VALUE(payload, '$.subtotalPriceSet.shopMoney.amount') AS FLOAT64)
-    + SAFE_CAST(JSON_VALUE(payload, '$.totalDiscountsSet.shopMoney.amount') AS FLOAT64) AS gross_sales,
-  SAFE_CAST(JSON_VALUE(payload, '$.totalDiscountsSet.shopMoney.amount') AS FLOAT64)       AS discounts,
+  (SELECT SUM(SAFE_CAST(JSON_VALUE(i, '$.originalTotalSet.shopMoney.amount') AS FLOAT64))
+     FROM UNNEST(JSON_QUERY_ARRAY(payload, '$.lineItems')) i)                             AS gross_sales,
+  SAFE_CAST(JSON_VALUE(payload, '$.totalDiscountsSet.shopMoney.amount') AS FLOAT64)
+    - IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(l, '$.originalPriceSet.shopMoney.amount') AS FLOAT64)
+                       - SAFE_CAST(JSON_VALUE(l, '$.discountedPriceSet.shopMoney.amount') AS FLOAT64))
+              FROM UNNEST(JSON_QUERY_ARRAY(payload, '$.shippingLines')) l), 0)            AS discounts,
+  IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(l, '$.originalPriceSet.shopMoney.amount') AS FLOAT64)
+                   - SAFE_CAST(JSON_VALUE(l, '$.discountedPriceSet.shopMoney.amount') AS FLOAT64))
+          FROM UNNEST(JSON_QUERY_ARRAY(payload, '$.shippingLines')) l), 0)                AS shipping_discount,
   SAFE_CAST(JSON_VALUE(payload, '$.subtotalPriceSet.shopMoney.amount') AS FLOAT64)        AS subtotal,
-  SAFE_CAST(JSON_VALUE(payload, '$.totalShippingPriceSet.shopMoney.amount') AS FLOAT64)   AS shipping,
+  SAFE_CAST(JSON_VALUE(payload, '$.totalShippingPriceSet.shopMoney.amount') AS FLOAT64)
+    - IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(l, '$.originalPriceSet.shopMoney.amount') AS FLOAT64)
+                       - SAFE_CAST(JSON_VALUE(l, '$.discountedPriceSet.shopMoney.amount') AS FLOAT64))
+              FROM UNNEST(JSON_QUERY_ARRAY(payload, '$.shippingLines')) l), 0)            AS shipping,
   SAFE_CAST(JSON_VALUE(payload, '$.totalTaxSet.shopMoney.amount') AS FLOAT64)             AS tax,
   SAFE_CAST(JSON_VALUE(payload, '$.currentTotalDutiesSet.shopMoney.amount') AS FLOAT64)   AS duties,
   SAFE_CAST(JSON_VALUE(payload, '$.currentTotalAdditionalFeesSet.shopMoney.amount') AS FLOAT64) AS additional_fees,
@@ -142,7 +151,7 @@ FROM latest o, UNNEST(JSON_QUERY_ARRAY(o.payload, '$.lineItems')) i;
 
 -- One row per refund.
 CREATE OR REPLACE VIEW `punlabs.ShopifySales.v_shopify_refunds`
-OPTIONS (description = "Shopify refunds from the latest version of each order. items_subtotal is the returned merchandise value; shipping_refund and tax_refund the rest.") AS
+OPTIONS (description = "Shopify refunds from the latest version of each order. items_refund = refund_total less shipping and tax (what Shopify's report books as Returns, also for refunds issued without line items); items_subtotal is the line-item figure when lines were recorded.") AS
 WITH latest AS (
   SELECT * EXCEPT (rn) FROM (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC, pulled_at DESC) AS rn
@@ -156,10 +165,16 @@ SELECT
   DATE(SAFE_CAST(JSON_VALUE(r, '$.createdAt') AS TIMESTAMP), 'America/New_York') AS refund_date,
   JSON_VALUE(r, '$.note') AS note,
   SAFE_CAST(JSON_VALUE(r, '$.totalRefundedSet.shopMoney.amount') AS FLOAT64) AS refund_total,
+  SAFE_CAST(JSON_VALUE(r, '$.totalRefundedSet.shopMoney.amount') AS FLOAT64)
+    - IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(s, '$.subtotalAmountSet.shopMoney.amount') AS FLOAT64)
+                       + SAFE_CAST(JSON_VALUE(s, '$.taxAmountSet.shopMoney.amount') AS FLOAT64))
+              FROM UNNEST(JSON_QUERY_ARRAY(r, '$.refundShippingLines')) s), 0)
+    - IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(li, '$.totalTaxSet.shopMoney.amount') AS FLOAT64))
+              FROM UNNEST(JSON_QUERY_ARRAY(r, '$.refundLineItems')) li), 0) AS items_refund,
   (SELECT SUM(SAFE_CAST(JSON_VALUE(li, '$.subtotalSet.shopMoney.amount') AS FLOAT64))
      FROM UNNEST(JSON_QUERY_ARRAY(r, '$.refundLineItems')) li) AS items_subtotal,
-  (SELECT SUM(SAFE_CAST(JSON_VALUE(li, '$.totalTaxSet.shopMoney.amount') AS FLOAT64))
-     FROM UNNEST(JSON_QUERY_ARRAY(r, '$.refundLineItems')) li)
+  IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(li, '$.totalTaxSet.shopMoney.amount') AS FLOAT64))
+     FROM UNNEST(JSON_QUERY_ARRAY(r, '$.refundLineItems')) li), 0)
   + IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(s, '$.taxAmountSet.shopMoney.amount') AS FLOAT64))
      FROM UNNEST(JSON_QUERY_ARRAY(r, '$.refundShippingLines')) s), 0) AS tax_refund,
   (SELECT SUM(SAFE_CAST(JSON_VALUE(s, '$.subtotalAmountSet.shopMoney.amount') AS FLOAT64))
@@ -306,21 +321,33 @@ sales AS (
   SELECT
     DATE(processed_at, 'America/New_York') AS day,
     COUNT(*) AS orders,
-    SUM(SAFE_CAST(JSON_VALUE(payload, '$.subtotalPriceSet.shopMoney.amount') AS FLOAT64)
-        + SAFE_CAST(JSON_VALUE(payload, '$.totalDiscountsSet.shopMoney.amount') AS FLOAT64)) AS gross_sales,
-    -SUM(SAFE_CAST(JSON_VALUE(payload, '$.totalDiscountsSet.shopMoney.amount') AS FLOAT64))   AS discounts,
-    SUM(SAFE_CAST(JSON_VALUE(payload, '$.totalShippingPriceSet.shopMoney.amount') AS FLOAT64)) AS shipping_charges,
+    SUM(IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(i, '$.originalTotalSet.shopMoney.amount') AS FLOAT64))
+                FROM UNNEST(JSON_QUERY_ARRAY(payload, '$.lineItems')) i), 0))                    AS gross_sales,
+    -SUM(SAFE_CAST(JSON_VALUE(payload, '$.totalDiscountsSet.shopMoney.amount') AS FLOAT64)
+         - IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(l, '$.originalPriceSet.shopMoney.amount') AS FLOAT64)
+                            - SAFE_CAST(JSON_VALUE(l, '$.discountedPriceSet.shopMoney.amount') AS FLOAT64))
+                   FROM UNNEST(JSON_QUERY_ARRAY(payload, '$.shippingLines')) l), 0))           AS discounts,
+    SUM(SAFE_CAST(JSON_VALUE(payload, '$.totalShippingPriceSet.shopMoney.amount') AS FLOAT64)
+        - IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(l, '$.originalPriceSet.shopMoney.amount') AS FLOAT64)
+                           - SAFE_CAST(JSON_VALUE(l, '$.discountedPriceSet.shopMoney.amount') AS FLOAT64))
+                  FROM UNNEST(JSON_QUERY_ARRAY(payload, '$.shippingLines')) l), 0))            AS shipping_charges,
     SUM(IFNULL(SAFE_CAST(JSON_VALUE(payload, '$.currentTotalDutiesSet.shopMoney.amount') AS FLOAT64), 0)) AS duties,
     SUM(IFNULL(SAFE_CAST(JSON_VALUE(payload, '$.currentTotalAdditionalFeesSet.shopMoney.amount') AS FLOAT64), 0)) AS additional_fees,
     SUM(SAFE_CAST(JSON_VALUE(payload, '$.totalTaxSet.shopMoney.amount') AS FLOAT64))          AS taxes
   FROM latest
   GROUP BY day
 ),
+-- Returns = refund total less refunded shipping and tax, so refunds issued
+-- without line items (a plain amount) still count, as they do in Shopify's report.
 returns AS (
   SELECT
     DATE(SAFE_CAST(JSON_VALUE(r, '$.createdAt') AS TIMESTAMP), 'America/New_York') AS day,
-    -SUM(IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(li, '$.subtotalSet.shopMoney.amount') AS FLOAT64))
-                 FROM UNNEST(JSON_QUERY_ARRAY(r, '$.refundLineItems')) li), 0)) AS returns,
+    -SUM(SAFE_CAST(JSON_VALUE(r, '$.totalRefundedSet.shopMoney.amount') AS FLOAT64)
+         - IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(s, '$.subtotalAmountSet.shopMoney.amount') AS FLOAT64)
+                            + SAFE_CAST(JSON_VALUE(s, '$.taxAmountSet.shopMoney.amount') AS FLOAT64))
+                   FROM UNNEST(JSON_QUERY_ARRAY(r, '$.refundShippingLines')) s), 0)
+         - IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(li, '$.totalTaxSet.shopMoney.amount') AS FLOAT64))
+                   FROM UNNEST(JSON_QUERY_ARRAY(r, '$.refundLineItems')) li), 0)) AS returns,
     -SUM(IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(s, '$.subtotalAmountSet.shopMoney.amount') AS FLOAT64))
                  FROM UNNEST(JSON_QUERY_ARRAY(r, '$.refundShippingLines')) s), 0)) AS shipping_refunds,
     -SUM(IFNULL((SELECT SUM(SAFE_CAST(JSON_VALUE(li, '$.totalTaxSet.shopMoney.amount') AS FLOAT64))

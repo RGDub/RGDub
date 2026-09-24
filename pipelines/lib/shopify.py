@@ -231,7 +231,9 @@ PARENT_FIELDS = {
     "RefundShippingLine": "refundShippingLines",
     "OrderTransaction": "transactions",
     "ProductVariant": "variants",
-    "InventoryLevel": "inventoryLevels",
+    # bulk results parent an InventoryLevel to the variant (the nearest connection
+    # node), not to the inlined inventoryItem it belongs to; a dotted path descends.
+    "InventoryLevel": "inventoryItem.inventoryLevels",
 }
 # Connection fields to materialise as [] when a parent had no children.
 EMPTY_FIELDS = {
@@ -280,7 +282,11 @@ def rebuild(lines: Iterator[dict]) -> list[dict]:
             fld = PARENT_FIELDS.get(obj.get("__typename", ""))
             if fld is None:
                 raise ShopifyApiError(f"no parent field mapping for bulk line typename {obj.get('__typename')!r}")
-            parent.setdefault(fld, []).append(obj)
+            *path, leaf = fld.split(".")
+            target = parent
+            for key in path:
+                target = target.setdefault(key, {})
+            target.setdefault(leaf, []).append(obj)
         _index(obj, by_id)
     _fill_empty(roots)
     return roots

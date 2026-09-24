@@ -173,6 +173,12 @@ App settings > Credentials, copy the client id and the secret:
 
 Then `bash ops/cloud_run/setup_shopify.sh` (grants, DDL, deploy, schedule, run once).
 
+Size, 2026-09-24: 59,666 orders back to the store's start (about 100 a year
+lately), 453 with refunds, 75 products / 78 variants, 1,368 payouts. The
+full-history pull takes about 12 minutes (the orders bulk operation alone is
+8), so the first load was run locally with `python -m pipelines.shopify.load`
+before the job was deployed; the daily incremental run takes under a minute.
+
 If a run fails with "client credentials grant failed", the secret was rotated
 in the Dev Dashboard or the app was uninstalled: `gcloud secrets versions add
 shopify-client-secret ...` with the new secret, or reinstall the app. Scope

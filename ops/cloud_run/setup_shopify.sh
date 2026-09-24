@@ -32,7 +32,7 @@ echo "== 2. Cloud Run job"
 gcloud run jobs deploy $JOB --source . --region $REGION --project $PROJECT \
   --service-account $SA \
   --command python --args="-m,pipelines.shopify.load" \
-  --task-timeout 1800 --max-retries 1 --quiet
+  --task-timeout 3600 --max-retries 1 --quiet
 
 echo "== 3. Cloud Scheduler: daily 07:00 America/New_York"
 URI="https://run.googleapis.com/v2/projects/$PROJECT/locations/$REGION/jobs/$JOB:run"

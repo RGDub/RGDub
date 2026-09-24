@@ -128,21 +128,6 @@ ORDERS_BULK_QUERY = """
       refunds {
         __typename id createdAt note
         totalRefundedSet %(m)s
-        refundLineItems { edges { node {
-          __typename id quantity restockType
-          lineItem { id sku }
-          subtotalSet %(m)s
-          totalTaxSet %(m)s
-        } } }
-        refundShippingLines { edges { node {
-          __typename id
-          subtotalAmountSet %(m)s
-          taxAmountSet %(m)s
-        } } }
-        transactions { edges { node {
-          __typename id kind status gateway processedAt
-          amountSet %(m)s
-        } } }
       }
       transactions {
         id kind status gateway processedAt test paymentId
@@ -158,6 +143,35 @@ ORDERS_BULK_QUERY = """
   }
 }
 """
+
+# Bulk queries allow at most five connections and none inside a list field, so
+# refund detail (a connection under the ``refunds`` list) is fetched per
+# refunded order with this ordinary query and merged in.
+REFUNDS_QUERY = """
+query Refunds($id: ID!) {
+  order(id: $id) {
+    refunds {
+      __typename id createdAt note
+      totalRefundedSet %(m)s
+      refundLineItems(first: 100) { nodes {
+        __typename id quantity restockType
+        lineItem { id sku }
+        subtotalSet %(m)s
+        totalTaxSet %(m)s
+      } }
+      refundShippingLines(first: 20) { nodes {
+        __typename id
+        subtotalAmountSet %(m)s
+        taxAmountSet %(m)s
+      } }
+      transactions(first: 20) { nodes {
+        __typename id kind status gateway processedAt
+        amountSet %(m)s
+      } }
+    }
+  }
+}
+""" % {"m": _M}
 
 PRODUCTS_BULK_QUERY = """
 {
@@ -226,6 +240,17 @@ EMPTY_FIELDS = {
     "Product": ("variants",),
     "InventoryItem": ("inventoryLevels",),
 }
+
+
+def unwrap_nodes(obj: Any) -> Any:
+    """Replace ``{"nodes": [...]}`` connection wrappers with plain lists, recursively."""
+    if isinstance(obj, dict):
+        if set(obj) <= {"nodes", "pageInfo"} and "nodes" in obj:
+            return [unwrap_nodes(n) for n in obj["nodes"]]
+        return {k: unwrap_nodes(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [unwrap_nodes(v) for v in obj]
+    return obj
 
 
 def _index(obj: Any, by_id: dict[str, dict]) -> None:
@@ -427,7 +452,17 @@ class ShopifyClient:
         """Every order (or those updated at/after ``updated_at_min``, ISO 8601 UTC), fully nested."""
         flt = f"updated_at:>={updated_at_min}" if updated_at_min else ""
         query = ORDERS_BULK_QUERY % {"filter": json.dumps(flt), "m": _M}
-        return self.bulk(query)
+        orders = self.bulk(query)
+        refunded = [o for o in orders if o.get("refunds")]
+        for o in refunded:
+            o["refunds"] = self.refunds(o["id"])
+        log.info("orders: %d, refund detail fetched for %d", len(orders), len(refunded))
+        return orders
+
+    def refunds(self, order_id: str) -> list[dict]:
+        """An order's refunds with their line items, shipping lines and transactions."""
+        order = (self.query(REFUNDS_QUERY, {"id": order_id}) or {}).get("order") or {}
+        return [unwrap_nodes(r) for r in order.get("refunds") or []]
 
     def products(self) -> list[dict]:
         """Every product with its variants, each variant with inventory by location."""

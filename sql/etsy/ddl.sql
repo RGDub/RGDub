@@ -273,3 +273,19 @@ FROM (
   SELECT *, ROW_NUMBER() OVER (PARTITION BY payment_id ORDER BY updated_at DESC, pulled_at DESC) AS rn
   FROM `punlabs.EtsySales.etsy_payments_raw`)
 WHERE rn = 1;
+
+-- Fulfillment log for pipelines/etsy/mcf.py (the /etsy-mcf skill). Append-only;
+-- the latest row per receipt is its state: placed -> shipped -> confirmed, or failed.
+CREATE TABLE IF NOT EXISTS `punlabs.EtsySales.etsy_mcf_log` (
+  receipt_id   INT64     NOT NULL,
+  mcf_order_id STRING    NOT NULL OPTIONS(description="Amazon sellerFulfillmentOrderId, Etsy-<receipt_id>"),
+  state        STRING    NOT NULL OPTIONS(description="placed | shipped | confirmed | failed"),
+  carrier      STRING,
+  tracking     STRING,
+  detail       STRING    OPTIONS(description="JSON: items, fee, errors"),
+  updated_at   TIMESTAMP NOT NULL,
+  run_id       STRING
+)
+PARTITION BY DATE(updated_at)
+CLUSTER BY receipt_id
+OPTIONS (description = "Etsy orders sent to Amazon Multi-Channel Fulfillment and confirmed back to Etsy. Latest row per receipt is current.");

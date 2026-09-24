@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 BASE_URL = "https://api.etsy.com/v3/application"
 TOKEN_URL = "https://api.etsy.com/v3/public/oauth/token"
 AUTHORIZE_URL = "https://www.etsy.com/oauth/connect"
-SCOPES = "transactions_r shops_r listings_r"
+SCOPES = "transactions_r transactions_w shops_r listings_r"   # transactions_w: post tracking
 PAGE_LIMIT = 100                      # Etsy's maximum per page
 
 SECRET_IDS = {
@@ -205,6 +205,14 @@ class EtsyClient:
     def payments_for_receipt(self, receipt_id: int) -> list[dict]:
         """Etsy's per-order money: gross, fees, net (as charged, as posted, and after adjustments)."""
         return self.request("GET", f"/shops/{self.shop_id}/receipts/{receipt_id}/payments").json().get("results", [])
+
+    def add_tracking(self, receipt_id: int, carrier_name: str, tracking_code: str, send_bcc: bool = False,
+                     note_to_buyer: str | None = None) -> dict:
+        """Mark a receipt shipped with a tracking number; Etsy emails the buyer. Needs transactions_w."""
+        body: dict[str, Any] = {"tracking_code": tracking_code, "carrier_name": carrier_name, "send_bcc": send_bcc}
+        if note_to_buyer:
+            body["note_to_buyer"] = note_to_buyer
+        return self.request("POST", f"/shops/{self.shop_id}/receipts/{receipt_id}/tracking", json_body=body).json()
 
     def listings(self, state: str = "active", includes: tuple[str, ...] = ("Inventory",)) -> Iterator[dict]:
         """Listings in one state (active, inactive, sold_out, draft, expired), with inventory (SKUs, prices)."""

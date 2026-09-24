@@ -227,6 +227,44 @@ class SpApiClient:
             params = {"maxResults": page_size, "details": "SHOW", "nextToken": token}
 
 
+    # ------------------------------------------- Multi-Channel Fulfillment
+    MCF = "/fba/outbound/2020-07-01"
+
+    def fulfillment_preview(self, address: dict, items: list[dict], speed: str = "Standard",
+                            feature_constraints: list[dict] | None = None) -> list[dict]:
+        """Ask Amazon whether it can fill the order and what it would charge, without placing it."""
+        body: dict[str, Any] = {"marketplaceId": self.marketplace_id, "address": address, "items": items,
+                                "shippingSpeedCategories": [speed]}
+        if feature_constraints:
+            body["featureConstraints"] = feature_constraints
+        return self.request("POST", f"{self.MCF}/fulfillmentOrders/preview", json_body=body).json() \
+            .get("payload", {}).get("fulfillmentPreviews", [])
+
+    def create_fulfillment_order(self, body: dict) -> None:
+        """Place an MCF order. Idempotent on sellerFulfillmentOrderId: a repeat returns 400 'already exists'."""
+        self.request("POST", f"{self.MCF}/fulfillmentOrders", json_body={"marketplaceId": self.marketplace_id, **body})
+
+    def get_fulfillment_order(self, seller_fulfillment_order_id: str) -> dict | None:
+        """The order, its items and shipments (with carrier + tracking once shipped); None if it does not exist."""
+        try:
+            return self.request("GET", f"{self.MCF}/fulfillmentOrders/{seller_fulfillment_order_id}").json().get("payload")
+        except SpApiError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def list_fulfillment_orders(self, since: dt.datetime) -> list[dict]:
+        out: list[dict] = []
+        params: dict[str, Any] = {"queryStartDate": iso_z(since)}
+        while True:
+            payload = self.request("GET", f"{self.MCF}/fulfillmentOrders", params=params).json().get("payload", {})
+            out.extend(payload.get("fulfillmentOrders", []))
+            token = payload.get("nextToken")
+            if not token:
+                return out
+            params = {"nextToken": token}
+
+
 def spapi_client_from_secrets(region: str = "NA", secret_ids: dict[str, str] | None = None) -> SpApiClient:
     from pipelines.lib.secrets import get_secret, preflight
 

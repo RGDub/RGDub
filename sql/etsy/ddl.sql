@@ -255,11 +255,20 @@ FROM latest v
 LEFT JOIN `punlabs.EtsySales.v_etsy_transactions` t USING (transaction_id);
 
 -- Latest payment per receipt: what the buyer paid, Etsy's cut, what the shop kept.
+-- adjusted_* are only set by Etsy when a refund or adjustment happened; the
+-- final_* columns fall back to the original figures otherwise, so they are
+-- always the number to use.
 CREATE OR REPLACE VIEW `punlabs.EtsySales.v_etsy_payments`
-OPTIONS (description = "One row per Etsy order's payment (latest version): gross, fees, net, and the adjusted figures after refunds. Dollars.") AS
-SELECT * EXCEPT (rn, pulled_at, run_id, payload),
-       SAFE_DIVIDE(adjusted_fees, NULLIF(adjusted_gross, 0)) AS fee_rate,
-       ARRAY_LENGTH(JSON_QUERY_ARRAY(payload, '$.payment_adjustments')) AS adjustment_count
+OPTIONS (description = "One row per Etsy order's payment (latest version). final_gross / final_fees / final_net are the figures after any refund or adjustment; dollars.") AS
+SELECT
+  payment_id, receipt_id, status, currency, created_at, updated_at,
+  DATE(created_at, 'America/New_York') AS payment_date,
+  gross, fees, net, adjusted_gross, adjusted_fees, adjusted_net,
+  COALESCE(adjusted_gross, gross) AS final_gross,
+  COALESCE(adjusted_fees, fees)   AS final_fees,
+  COALESCE(adjusted_net, net)     AS final_net,
+  SAFE_DIVIDE(COALESCE(adjusted_gross, gross) - COALESCE(adjusted_net, net), NULLIF(COALESCE(adjusted_gross, gross), 0)) AS take_rate,
+  ARRAY_LENGTH(JSON_QUERY_ARRAY(payload, '$.payment_adjustments')) AS adjustment_count
 FROM (
   SELECT *, ROW_NUMBER() OVER (PARTITION BY payment_id ORDER BY updated_at DESC, pulled_at DESC) AS rn
   FROM `punlabs.EtsySales.etsy_payments_raw`)

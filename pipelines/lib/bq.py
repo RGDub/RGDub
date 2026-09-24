@@ -97,3 +97,19 @@ def replace_window(bq, df: pd.DataFrame, table: str, where: str, schema=None) ->
 def sql_list(values: Iterable) -> str:
     """Render values as a quoted SQL list for an IN (...) clause."""
     return ", ".join("'" + str(v).replace("'", "\\'") + "'" for v in values)
+
+
+def load_json_rows(bq, rows: list[dict], table: str, write_disposition: str = "WRITE_APPEND") -> int:
+    """Append dict rows to ``table`` with its declared schema. Dict values land in JSON columns as objects."""
+    from google.cloud import bigquery
+
+    if not rows:
+        return 0
+    schema = table_schema(bq, table)
+    job = bq.load_table_from_json(
+        rows, table, job_config=bigquery.LoadJobConfig(schema=schema, write_disposition=write_disposition)
+    )
+    job.result()
+    n = job.output_rows or 0
+    log.info("loaded %d rows into %s (%s)", n, table, write_disposition)
+    return n

@@ -77,3 +77,27 @@ Verify:
 
     SELECT status, started_at, rows_written, error FROM `punlabs.AMZSales.pipeline_run_log`
     WHERE pipeline = 'qbo_daily' ORDER BY started_at DESC LIMIT 5;
+
+# Faire daily load (faire-daily)
+
+A third Cloud Run job from the same image, running `python -m pipelines.faire.load`
+daily at 06:30 America/New_York. It pulls every order updated since the last
+run (two-day overlap) plus the product catalog into `punlabs.FaireSales`
+(`faire_orders_raw`, `faire_products_raw`); the views in `sql/faire/ddl.sql`
+flatten them (`v_faire_orders`, `v_faire_order_items`, `v_faire_shipments`,
+`v_faire_products`).
+
+Auth is the Faire External API v2's two headers: app credentials
+(`FAIRE-API-APP-ID`, `FAIRE-API-SECRET-ID`, created 2026-06) and a brand access
+token, `FAIRE-API-ACCESS-TOKEN`. The token is generated once in the Brand
+Portal (Settings > Integrations > "Have an unpublished integration?" > enter the
+app's token) and stored with
+
+    pbpaste | tr -d '[:space:]' | gcloud secrets create FAIRE-API-ACCESS-TOKEN --project punlabs --data-file=- --replication-policy=automatic
+
+Then `bash ops/cloud_run/setup_faire.sh` (grants, DDL, deploy, schedule, run once).
+
+Verify:
+
+    SELECT status, started_at, rows_written, error FROM `punlabs.AMZSales.pipeline_run_log`
+    WHERE pipeline = 'faire_daily' ORDER BY started_at DESC LIMIT 5;

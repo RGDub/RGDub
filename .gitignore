@@ -1,6 +1,7 @@
-__pycache__/
+*.egg-info/
+*.json.key
 *.pyc
 .venv/
-*.json.key
+__pycache__/
+build/
 dist/
-*.egg-info/

@@ -7,6 +7,8 @@
 -- local day (America/New_York). The legacy table PL-ShopifySales-SalesbyDay
 -- (a manual export, last written 2025-12) stays as it is for history;
 -- v_shopify_sales_by_day carries the same figures forward from the raw orders.
+-- "Test orders" = Shopify's test flag OR a discount code starting with "test" (the $0 test100/TEST10001
+-- orders of 2025 were placed on the live checkout, so Shopify never flagged them).
 
 CREATE TABLE IF NOT EXISTS `punlabs.ShopifySales.shopify_orders_raw` (
   order_id           STRING    NOT NULL OPTIONS(description="Shopify order GID, e.g. gid://shopify/Order/1234567890"),
@@ -112,7 +114,7 @@ SELECT
   SAFE_CAST(JSON_VALUE(payload, '$.fulfillments[0].createdAt') AS TIMESTAMP)              AS fulfilled_at,
   pulled_at
 FROM latest
-WHERE NOT IFNULL(test, FALSE);
+WHERE NOT (IFNULL(test, FALSE) OR EXISTS (SELECT 1 FROM UNNEST(JSON_VALUE_ARRAY(payload, '$.discountCodes')) AS code WHERE LOWER(code) LIKE 'test%'));
 
 -- One row per order line.
 CREATE OR REPLACE VIEW `punlabs.ShopifySales.v_shopify_order_items`
@@ -121,7 +123,7 @@ WITH latest AS (
   SELECT * EXCEPT (rn) FROM (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC, pulled_at DESC) AS rn
     FROM `punlabs.ShopifySales.shopify_orders_raw`)
-  WHERE rn = 1 AND NOT IFNULL(test, FALSE)
+  WHERE rn = 1 AND NOT (IFNULL(test, FALSE) OR EXISTS (SELECT 1 FROM UNNEST(JSON_VALUE_ARRAY(payload, '$.discountCodes')) AS code WHERE LOWER(code) LIKE 'test%'))
 )
 SELECT
   o.order_id, o.order_number, o.financial_status,
@@ -156,7 +158,7 @@ WITH latest AS (
   SELECT * EXCEPT (rn) FROM (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC, pulled_at DESC) AS rn
     FROM `punlabs.ShopifySales.shopify_orders_raw`)
-  WHERE rn = 1 AND NOT IFNULL(test, FALSE)
+  WHERE rn = 1 AND NOT (IFNULL(test, FALSE) OR EXISTS (SELECT 1 FROM UNNEST(JSON_VALUE_ARRAY(payload, '$.discountCodes')) AS code WHERE LOWER(code) LIKE 'test%'))
 )
 SELECT
   o.order_id, o.order_number,
@@ -190,7 +192,7 @@ WITH latest AS (
   SELECT * EXCEPT (rn) FROM (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC, pulled_at DESC) AS rn
     FROM `punlabs.ShopifySales.shopify_orders_raw`)
-  WHERE rn = 1 AND NOT IFNULL(test, FALSE)
+  WHERE rn = 1 AND NOT (IFNULL(test, FALSE) OR EXISTS (SELECT 1 FROM UNNEST(JSON_VALUE_ARRAY(payload, '$.discountCodes')) AS code WHERE LOWER(code) LIKE 'test%'))
 )
 SELECT
   o.order_id, o.order_number,
@@ -211,7 +213,7 @@ WITH latest AS (
   SELECT * EXCEPT (rn) FROM (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC, pulled_at DESC) AS rn
     FROM `punlabs.ShopifySales.shopify_orders_raw`)
-  WHERE rn = 1 AND NOT IFNULL(test, FALSE)
+  WHERE rn = 1 AND NOT (IFNULL(test, FALSE) OR EXISTS (SELECT 1 FROM UNNEST(JSON_VALUE_ARRAY(payload, '$.discountCodes')) AS code WHERE LOWER(code) LIKE 'test%'))
 )
 SELECT
   o.order_id, o.order_number,
@@ -315,7 +317,7 @@ WITH latest AS (
   SELECT * EXCEPT (rn) FROM (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC, pulled_at DESC) AS rn
     FROM `punlabs.ShopifySales.shopify_orders_raw`)
-  WHERE rn = 1 AND NOT IFNULL(test, FALSE)
+  WHERE rn = 1 AND NOT (IFNULL(test, FALSE) OR EXISTS (SELECT 1 FROM UNNEST(JSON_VALUE_ARRAY(payload, '$.discountCodes')) AS code WHERE LOWER(code) LIKE 'test%'))
 ),
 sales AS (
   SELECT

@@ -104,8 +104,60 @@ def _run_country(*, dry_run: bool, client: SpApiClient | None, day: dt.date | No
         return ctx.rows_written, sp
 
 
+GRAIN = ["Date", "FNSKU", "MSKU", "Disposition", "Location"]
+
+
+def check_range(df: pd.DataFrame, start: dt.date, end: dt.date) -> tuple[dt.date, dt.date]:
+    """Refuse a range pull with duplicate grain rows or missing days; return the span it covers."""
+    days = pd.to_datetime(df["Date"]).dt.date
+    dupes = int(df.assign(Date=days).duplicated(subset=[c for c in GRAIN if c in df.columns]).sum())
+    if dupes:
+        raise RuntimeError(f"range report has {dupes} duplicate grain rows; not replacing")
+    first, last = days.min(), days.max()
+    if first > start + dt.timedelta(days=7):
+        raise RuntimeError(f"range report starts {first}, asked for {start}; not replacing")
+    missing = sorted(set(pd.date_range(first, last).date) - set(days))
+    if missing:
+        raise RuntimeError(f"range report is missing {len(missing)} days ({missing[:5]}...); not replacing")
+    return first, last
+
+
+def repull_range(start: dt.date, end: dt.date, *, dry_run: bool = False, client: SpApiClient | None = None) -> int:
+    """Re-pull the country ledger for ``start``..``end`` in ONE report and replace exactly the days it returns.
+
+    One ledger request instead of one per day (the ledger report has a rolling
+    ~10-per-24h cap). Used 2026-09-26 to clear the notebook's doubled days and
+    the 2026-08-25..09-14 gap.
+    """
+    with run_logged("amz_fba_inv_ledger_repull", enabled=not dry_run) as ctx:
+        sp = client or spapi_client_from_secrets()
+        df = transform(sp.run_report(
+            REPORT_TYPE,
+            dt.datetime.combine(start, dt.time.min, tzinfo=dt.timezone.utc),
+            dt.datetime.combine(end, dt.time(23, 59, 59), tzinfo=dt.timezone.utc),
+            timeout_s=1800,
+            report_options={"aggregateByLocation": "COUNTRY", "aggregatedByTimePeriod": "DAILY"}))
+        first, last = check_range(df, start, end)
+        log.info("ledger range %s..%s: %d rows over %d days", first, last, len(df), (last - first).days + 1)
+        if dry_run:
+            return len(df)
+        ctx.rows_written = bqlib.replace_window(
+            bqlib.client(), df, TABLE, where=f"Date BETWEEN DATE('{first}') AND DATE('{last}')")
+        return ctx.rows_written
+
+
 if __name__ == "__main__":
-    import sys
+    import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    print(run(dry_run="--dry-run" in sys.argv))
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--start", type=dt.date.fromisoformat, help="with --end: re-pull a date range in one report")
+    ap.add_argument("--end", type=dt.date.fromisoformat)
+    args = ap.parse_args()
+    if (args.start is None) != (args.end is None):
+        ap.error("--start and --end must be given together")
+    if args.start:
+        print(repull_range(args.start, args.end, dry_run=args.dry_run))
+    else:
+        print(run(dry_run=args.dry_run))

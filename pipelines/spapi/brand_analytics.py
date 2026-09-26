@@ -13,7 +13,7 @@ Rules learned live on 2026-09-24:
   the weekly run re-pulls the last ``LOOKBACK_WEEKS`` weeks and skips a week
   that is not published yet.
 
-    python -m pipelines.spapi.brand_analytics                   # last 3 weeks, both reports
+    python -m pipelines.spapi.brand_analytics                   # last 3 weeks, both reports (Tuesdays only)
     python -m pipelines.spapi.brand_analytics --backfill 52     # last 52 weeks
     python -m pipelines.spapi.brand_analytics --scp-only / --sqp-only
 """
@@ -38,6 +38,7 @@ SQP_REPORT = "GET_BRAND_ANALYTICS_SEARCH_QUERY_PERFORMANCE_REPORT"
 LOOKBACK_WEEKS = 3
 SQP_BATCH = 15          # ASINs per SQP request: the asin option is capped at 200 characters (15 x 10 + 14 commas = 164)
 PUBLISH_LAG_DAYS = 3    # a week is requested only once it ended at least this long ago
+RUN_WEEKDAY = 1         # Tuesday: the scheduled task fires daily but only loads on this day (0 = Monday)
 
 
 # ------------------------------------------------------------------ weeks
@@ -148,7 +149,15 @@ def _load(bq, table: str, rows: list[dict], week: tuple[dt.date, dt.date]) -> in
 
 def run(*, weeks: list[tuple[dt.date, dt.date]] | None = None, scp: bool = True, sqp: bool = True,
         dry_run: bool = False, client: SpApiClient | None = None, pause_s: int = 20) -> dict[str, int]:
-    """Load ``weeks`` (default: the last LOOKBACK_WEEKS complete weeks). Returns rows per table."""
+    """Load ``weeks`` (default: the last LOOKBACK_WEEKS complete weeks). Returns rows per table.
+
+    The default (scheduled) run only does work on RUN_WEEKDAY. The Daily Activity
+    task calls it every day, and pulling ~20 SQP reports daily alongside the other
+    SP-API jobs was tripping the shared report quota (HTTP 429 on orders/traffic).
+    """
+    if weeks is None and dt.date.today().weekday() != RUN_WEEKDAY:
+        log.info("Brand Analytics loads weekly (weekday %d); nothing to do today", RUN_WEEKDAY)
+        return {"scp": 0, "sqp": 0}
     weeks = weeks or last_complete_weeks(LOOKBACK_WEEKS)
     totals = {"scp": 0, "sqp": 0}
     with run_logged("ba_weekly", enabled=not dry_run) as ctx:

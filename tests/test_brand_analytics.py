@@ -48,3 +48,14 @@ def test_flatten_sqp_matches_amazons_field_names():
     assert row["impressions_total"] == 16083 and row["impressions_asin"] == 52 and row["impressions_asin_share"] == 0.32
     assert row["click_median_price_asin"] == 23.99 and row["purchase_median_price_asin"] is None
     assert row["purchase_rate_total"] == 2.52 and row["payload"] is rec
+
+
+def test_scheduled_run_only_loads_on_run_weekday(monkeypatch):
+    class Saturday(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 26)
+
+    monkeypatch.setattr(ba.dt, "date", Saturday)
+    # no client passed: reaching the SP-API would fail, so returning proves the skip
+    assert ba.run() == {"scp": 0, "sqp": 0}
